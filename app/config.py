@@ -1,0 +1,32 @@
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # OpenAI
+    openai_api_key: str
+    openai_model: str = "gpt-5.4"
+    openai_model_strong: str = "gpt-5.4"
+    openai_model_fast: str = "gpt-5.4-mini"
+
+    # Telegram
+    telegram_bot_token: str
+
+    # Database
+    database_url: str = "postgresql+asyncpg://healthagent:healthagent@localhost:5432/healthagent"
+
+    # Access
+    allowed_telegram_user_id: int
+
+    # WHOOP
+    whoop_client_id: str = ""
+    whoop_client_secret: str = ""
+    whoop_redirect_uri: str = "http://localhost:8000/whoop/callback"
+
+    # App
+    app_env: str = "dev"
+    log_level: str = "INFO"
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+
+settings = Settings()

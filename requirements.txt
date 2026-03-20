@@ -1,0 +1,22 @@
+# Web framework
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+
+# Database
+sqlalchemy[asyncio]==2.0.*
+asyncpg==0.30.*
+alembic==1.14.*
+
+# OpenAI
+openai-agents>=0.1
+openai>=1.60
+
+# Telegram
+python-telegram-bot==21.*
+
+# Config
+pydantic-settings==2.*
+python-dotenv==1.*
+
+# Scheduler
+apscheduler==3.*

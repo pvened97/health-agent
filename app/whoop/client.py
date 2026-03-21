@@ -114,6 +114,19 @@ class WhoopClient:
         return data.get("records", [])
 
 
+    async def get_sleep_by_id(self, sleep_id: str) -> dict:
+        """Получает одну запись сна по ID."""
+        return await self._get(f"/activity/sleep/{sleep_id}")
+
+    async def get_workout_by_id(self, workout_id: str) -> dict:
+        """Получает одну тренировку по ID."""
+        return await self._get(f"/activity/workout/{workout_id}")
+
+    async def get_recovery_by_cycle_id(self, cycle_id: str) -> dict:
+        """Получает recovery по cycle ID."""
+        return await self._get(f"/recovery/{cycle_id}")
+
+
 async def get_whoop_client(user_id) -> WhoopClient | None:
     """Создаёт WhoopClient для пользователя, если есть активное подключение."""
     async with async_session() as session:
@@ -127,3 +140,18 @@ async def get_whoop_client(user_id) -> WhoopClient | None:
         return None
 
     return WhoopClient(conn)
+
+
+async def get_whoop_client_by_whoop_user_id(whoop_user_id: int) -> tuple[WhoopClient, WhoopConnection] | tuple[None, None]:
+    """Находит WhoopClient по WHOOP user_id (из webhook payload)."""
+    async with async_session() as session:
+        stmt = select(WhoopConnection).where(
+            WhoopConnection.whoop_user_id == str(whoop_user_id),
+            WhoopConnection.is_active.is_(True),
+        )
+        conn = (await session.execute(stmt)).scalar_one_or_none()
+
+    if not conn:
+        return None, None
+
+    return WhoopClient(conn), conn

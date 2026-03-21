@@ -82,6 +82,24 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
+@app.post("/whoop/webhook")
+async def whoop_webhook(request: Request):
+    """Принимает webhook от WHOOP при обновлении данных."""
+    from app.whoop.webhook import handle_webhook, verify_signature
+
+    raw_body = await request.body()
+    signature = request.headers.get("X-WHOOP-Signature", "")
+    timestamp = request.headers.get("X-WHOOP-Signature-Timestamp", "")
+
+    if signature and not verify_signature(raw_body, signature, timestamp):
+        logger.warning("WHOOP webhook: invalid signature")
+        return {"status": "invalid signature"}, 401
+
+    payload = await request.json()
+    result = await handle_webhook(payload)
+    return {"status": result}
+
+
 @app.get("/whoop/auth")
 async def whoop_auth():
     """Редиректит на WHOOP OAuth авторизацию."""

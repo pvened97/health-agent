@@ -59,6 +59,20 @@ async def exchange_code_for_tokens(code: str, user_id) -> WhoopConnection:
 
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=data["expires_in"])
 
+    # Получаем WHOOP user_id из профиля
+    whoop_user_id = None
+    try:
+        async with httpx.AsyncClient() as client:
+            profile_resp = await client.get(
+                "https://api.prod.whoop.com/developer/v2/user/profile/basic",
+                headers={"Authorization": f"Bearer {data['access_token']}"},
+                timeout=10,
+            )
+            if profile_resp.status_code == 200:
+                whoop_user_id = str(profile_resp.json().get("user_id", ""))
+    except Exception:
+        logger.warning("Could not fetch WHOOP user_id from profile")
+
     async with async_session() as session:
         # Ищем существующее подключение
         stmt = select(WhoopConnection).where(WhoopConnection.user_id == user_id)
@@ -71,9 +85,12 @@ async def exchange_code_for_tokens(code: str, user_id) -> WhoopConnection:
             conn.scopes = data.get("scope", SCOPES)
             conn.is_active = True
             conn.last_refresh_at = datetime.now(timezone.utc)
+            if whoop_user_id:
+                conn.whoop_user_id = whoop_user_id
         else:
             conn = WhoopConnection(
                 user_id=user_id,
+                whoop_user_id=whoop_user_id,
                 access_token=data["access_token"],
                 refresh_token=data["refresh_token"],
                 token_expires_at=expires_at,

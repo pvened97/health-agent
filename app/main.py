@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 from app.config import settings
-from app.telegram.bot import start_polling, stop_polling
+from app.telegram.bot import start_polling, stop_polling, start_webhook, stop_webhook
 
 
 class JSONFormatter(logging.Formatter):
@@ -48,15 +48,19 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting Health Agent (env=%s)...", settings.app_env)
 
-    # Start Telegram bot in polling mode (dev)
     if settings.app_env == "dev":
         _bot_app = await start_polling()
+    else:
+        _bot_app = await start_webhook()
 
     yield
 
     # Shutdown
     if _bot_app:
-        await stop_polling(_bot_app)
+        if settings.app_env == "dev":
+            await stop_polling(_bot_app)
+        else:
+            await stop_webhook(_bot_app)
     logger.info("Health Agent stopped.")
 
 
@@ -66,6 +70,16 @@ app = FastAPI(title="Health Agent", lifespan=lifespan)
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Принимает updates от Telegram в webhook mode."""
+    from telegram import Update
+    data = await request.json()
+    update = Update.de_json(data, _bot_app.bot)
+    await _bot_app.process_update(update)
+    return {"ok": True}
 
 
 @app.get("/whoop/auth")

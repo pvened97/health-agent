@@ -1,5 +1,6 @@
 import logging
 
+from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters
 
 from app.config import settings
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_bot_app():
-    """Создаёт Telegram Application для polling mode."""
+    """Создаёт Telegram Application."""
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
     app.add_handler(CommandHandler("start", handle_start))
@@ -33,5 +34,23 @@ async def start_polling():
 async def stop_polling(app):
     """Останавливает polling."""
     await app.updater.stop()
+    await app.stop()
+    await app.shutdown()
+
+
+async def start_webhook():
+    """Запускает бота в webhook mode (для prod)."""
+    app = create_bot_app()
+    webhook_url = settings.telegram_webhook_url
+    logger.info("Starting Telegram bot in webhook mode (url=%s)...", webhook_url)
+    await app.initialize()
+    await app.start()
+    await app.bot.set_webhook(url=webhook_url)
+    return app
+
+
+async def stop_webhook(app):
+    """Останавливает webhook."""
+    await app.bot.delete_webhook()
     await app.stop()
     await app.shutdown()

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str
+    telegram_webhook_url: str = ""  # e.g. https://your-domain/telegram/webhook
 
     # Database
     database_url: str = "postgresql+asyncpg://healthagent:healthagent@localhost:5432/healthagent"

@@ -1,9 +1,10 @@
 import asyncio
 import base64
 import logging
+import re
 
 from telegram import Update
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
 from app.agent.agent import run_agent
@@ -11,6 +12,23 @@ from app.config import settings
 from app.telegram.user_service import get_or_create_user
 
 logger = logging.getLogger(__name__)
+
+
+def _md_to_html(text: str) -> str:
+    """Конвертирует базовый Markdown в Telegram HTML."""
+    # Экранируем HTML-спецсимволы (кроме тех, что мы сами создадим)
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # **bold** → <b>bold</b>
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    # *italic* → <i>italic</i>
+    text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
+    # _italic_ → <i>italic</i> (но не внутри слов)
+    text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<i>\1</i>", text)
+    # `code` → <code>code</code>
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    # ### Header → <b>Header</b>
+    text = re.sub(r"^#{1,3}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
+    return text
 
 
 async def _send_typing_while(chat_id: int, bot, task: asyncio.Task) -> None:
@@ -64,7 +82,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     finally:
         typing_task.cancel()
 
-    await update.message.reply_text(response)
+    try:
+        await update.message.reply_text(_md_to_html(response), parse_mode=ParseMode.HTML)
+    except Exception:
+        # Fallback без форматирования если HTML невалидный
+        await update.message.reply_text(response)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -103,7 +125,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     finally:
         typing_task.cancel()
 
-    await update.message.reply_text(response)
+    try:
+        await update.message.reply_text(_md_to_html(response), parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text(response)
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

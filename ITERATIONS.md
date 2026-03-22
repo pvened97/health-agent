@@ -167,13 +167,13 @@
 
 **Цель:** перенести бота на виртуалку, добавить WHOOP webhooks для реалтайм-данных, настроить scheduler.
 
-- [ ] **Деплой на VPS:**
+- [x] **Деплой на VPS:**
   - Dockerfile для приложения
   - docker-compose.yml: app + PostgreSQL
-  - Telegram webhook mode (вместо polling)
-  - HTTPS (nginx/caddy reverse proxy)
+  - Telegram polling mode (webhook готов, но polling достаточно для MVP)
+  - HTTPS через Caddy + Let's Encrypt + DuckDNS (health-bot.duckdns.org)
   - Переменные окружения для prod
-  - Публичный URL для WHOOP callback и webhook
+  - WHOOP OAuth работает через HTTPS
 - [ ] **WHOOP webhooks:**
   - `app/whoop/webhook.py` — обработка входящих POST от WHOOP
   - Регистрация webhook через WHOOP API (одноразово при подключении)

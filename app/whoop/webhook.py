@@ -27,6 +27,91 @@ def verify_signature(raw_body: bytes, signature: str, timestamp: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+async def _trigger_morning_checkin(user_id: int) -> None:
+    """Отправляет утреннюю сводку после получения recovery данных."""
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.logs import SleepLog, RecoveryLog
+    from app.models.user import TelegramAccount
+
+    today = date.today()
+
+    async with async_session() as session:
+        # Проверяем: есть ли сон и recovery за сегодня
+        sleep = (await session.execute(
+            select(SleepLog.id).where(
+                SleepLog.user_id == user_id,
+                SleepLog.date == today,
+                SleepLog.source == "whoop_api",
+                SleepLog.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+
+        recovery = (await session.execute(
+            select(RecoveryLog.id).where(
+                RecoveryLog.user_id == user_id,
+                RecoveryLog.date == today,
+                RecoveryLog.source == "whoop_api",
+                RecoveryLog.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+
+        if not sleep or not recovery:
+            logger.info("Morning checkin skipped: sleep=%s, recovery=%s", bool(sleep), bool(recovery))
+            return
+
+        # Проверяем что сводку сегодня ещё не отправляли (по agent_runs)
+        from app.models.agent import AgentRun
+        already_sent = (await session.execute(
+            select(AgentRun.id).where(
+                AgentRun.user_id == user_id,
+                AgentRun.trigger == "recovery_webhook",
+                AgentRun.created_at >= today.isoformat(),
+            ).limit(1)
+        )).scalar_one_or_none()
+
+        if already_sent:
+            logger.info("Morning checkin already sent today for user %s", user_id)
+            return
+
+        # Получаем chat_id
+        tg = (await session.execute(
+            select(TelegramAccount).where(TelegramAccount.user_id == user_id)
+        )).scalar_one_or_none()
+
+    if not tg or not tg.chat_id:
+        return
+
+    try:
+        from app.agent.agent import run_agent
+        response = await run_agent(
+            "Дай краткую утреннюю сводку: мой recovery, как я спал, и рекомендацию на день. Коротко, 3-5 предложений.",
+            user_id=user_id,
+            trigger="recovery_webhook",
+        )
+
+        from app.telegram.handlers import _md_to_html
+        from telegram import Bot
+        from telegram.constants import ParseMode
+
+        bot = Bot(token=settings.telegram_bot_token)
+        try:
+            await bot.send_message(
+                chat_id=tg.chat_id,
+                text=_md_to_html(response),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            await bot.send_message(chat_id=tg.chat_id, text=response)
+
+        logger.info("Morning checkin sent to user %s (triggered by recovery webhook)", user_id)
+    except Exception:
+        logger.exception("Morning checkin failed for user %s", user_id)
+
+
 async def handle_webhook(payload: dict) -> str:
     """Обрабатывает входящий webhook от WHOOP.
 
@@ -61,6 +146,10 @@ async def handle_webhook(payload: dict) -> str:
             record = await client.get_recovery_by_cycle_id(object_id)
             synced = await _sync_recovery(user_id, [record])
             logger.info("WHOOP webhook synced recovery: %d records", synced)
+
+            # Триггерим утреннюю сводку — recovery пришёл, значит данные готовы
+            if synced:
+                await _trigger_morning_checkin(user_id)
 
         elif event_type == "workout.updated":
             record = await client.get_workout_by_id(object_id)

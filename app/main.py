@@ -53,9 +53,56 @@ async def lifespan(app: FastAPI):
     else:
         _bot_app = await start_webhook()
 
+    # --- Scheduler ---
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    from app.scheduler.jobs import (
+        refresh_whoop_tokens,
+        nightly_whoop_sync,
+        evening_summary,
+        weekly_streak_check,
+        sleep_trend_check,
+        weekly_summary,
+    )
+
+    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+
+    # Обновление WHOOP токенов — каждый час
+    scheduler.add_job(refresh_whoop_tokens, CronTrigger(minute=0), id="refresh_tokens")
+
+    # Ночная синхронизация WHOOP — 03:00
+    scheduler.add_job(nightly_whoop_sync, CronTrigger(hour=3, minute=0), id="nightly_sync")
+
+    # Вечерний итог дня — 22:00
+    bot = _bot_app.bot
+    scheduler.add_job(
+        evening_summary, CronTrigger(hour=22, minute=0),
+        args=[bot], id="evening_summary",
+    )
+
+    # Недельный streak + тренд сна — понедельник 10:00
+    scheduler.add_job(
+        weekly_streak_check, CronTrigger(day_of_week="mon", hour=10, minute=0),
+        args=[bot], id="weekly_streak",
+    )
+    scheduler.add_job(
+        sleep_trend_check, CronTrigger(day_of_week="mon", hour=10, minute=5),
+        args=[bot], id="sleep_trend",
+    )
+
+    # Недельный обзор — воскресенье 20:00
+    scheduler.add_job(
+        weekly_summary, CronTrigger(day_of_week="sun", hour=20, minute=0),
+        args=[bot], id="weekly_summary",
+    )
+
+    scheduler.start()
+    logger.info("Scheduler started: %d jobs", len(scheduler.get_jobs()))
+
     yield
 
     # Shutdown
+    scheduler.shutdown(wait=False)
     if _bot_app:
         if settings.app_env == "dev":
             await stop_polling(_bot_app)

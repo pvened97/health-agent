@@ -1,3 +1,4 @@
+import re
 from datetime import date, timedelta
 
 from agents import function_tool
@@ -7,6 +8,29 @@ from app.agent.tools._context import get_user_id
 from app.database import async_session
 from app.models.logs import SleepLog, MealLog, WorkoutLog, DailyNote, RecoveryLog
 from app.models.memory import UserProfile, DerivedRule
+
+
+def _parse_goal(value: str) -> tuple[int | None, int | None]:
+    """Парсит цель: '2500' → (2500, 2500), '110-150' → (110, 150)."""
+    m = re.match(r"(\d+)\s*[-–—]\s*(\d+)", value)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.match(r"(\d+)", value)
+    if m:
+        v = int(m.group(1))
+        return v, v
+    return None, None
+
+
+def _goal_progress(actual: float, goal_min: int, goal_max: int) -> str:
+    """Форматирует прогресс: '1800 ккал (цель: 2500, 72%)' или 'цель: 110-150г, 95%'."""
+    if goal_min == goal_max:
+        pct = int(actual / goal_max * 100)
+        return f"цель: {goal_max}, {pct}%"
+    else:
+        mid = (goal_min + goal_max) / 2
+        pct = int(actual / mid * 100)
+        return f"цель: {goal_min}–{goal_max}, {pct}%"
 
 
 @function_tool
@@ -103,12 +127,34 @@ async def get_daily_recommendation_context() -> str:
         meal_row = (await session.execute(meals_stmt)).one()
         m_count, m_cal, m_prot, m_carbs, m_fat = meal_row
 
+        # --- Цели по питанию из профиля ---
+        cal_min, cal_max = None, None
+        prot_min, prot_max = None, None
+        goals_stmt = select(UserProfile).where(
+            UserProfile.user_id == user_id,
+            UserProfile.category == "goals",
+            UserProfile.key.in_(["daily_calories", "daily_protein_g"]),
+            UserProfile.deleted_at.is_(None),
+        )
+        goals = (await session.execute(goals_stmt)).scalars().all()
+        for g in goals:
+            if g.key == "daily_calories":
+                cal_min, cal_max = _parse_goal(g.value)
+            elif g.key == "daily_protein_g":
+                prot_min, prot_max = _parse_goal(g.value)
+
         if m_count:
             meal_parts = [f"Питание вчера ({m_count} приёмов):"]
             if m_cal:
-                meal_parts.append(f"  Калории: {int(m_cal)} ккал")
+                cal_str = f"  Калории: {int(m_cal)} ккал"
+                if cal_min and cal_max:
+                    cal_str += f" ({_goal_progress(m_cal, cal_min, cal_max)})"
+                meal_parts.append(cal_str)
             if m_prot:
-                meal_parts.append(f"  Белок: {m_prot:.0f}г")
+                prot_str = f"  Белок: {m_prot:.0f}г"
+                if prot_min and prot_max:
+                    prot_str += f" ({_goal_progress(m_prot, prot_min, prot_max)})"
+                meal_parts.append(prot_str)
             if m_carbs:
                 meal_parts.append(f"  Углеводы: {m_carbs:.0f}г")
             if m_fat:

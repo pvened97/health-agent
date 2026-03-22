@@ -34,12 +34,16 @@ def _goal_progress(actual: float, goal_min: int, goal_max: int) -> str:
 
 
 @function_tool
-async def get_daily_recommendation_context() -> str:
-    """Собирает ВСЕ данные для рекомендации на сегодня: вчерашний сон, питание, последняя тренировка, профиль, наблюдения. Вызывай ПЕРЕД тем как давать рекомендацию по тренировке, питанию или режиму дня.
+async def get_daily_recommendation_context(target_date: str = "") -> str:
+    """Собирает данные за конкретный день: питание (с прогрессом по целям), тренировки, сон, WHOOP recovery, профиль, наблюдения. Вызывай ПЕРЕД тем как давать рекомендацию, оценку дня или промежуточные итоги.
+
+    Args:
+        target_date: Дата в формате YYYY-MM-DD. Если не указана — используется сегодня.
     """
     user_id = get_user_id()
     today = date.today()
-    yesterday = today - timedelta(days=1)
+    target = date.fromisoformat(target_date) if target_date else today
+    target_label = "сегодня" if target == today else ("вчера" if target == today - timedelta(days=1) else str(target))
     sections = []
 
     async with async_session() as session:
@@ -67,21 +71,21 @@ async def get_daily_recommendation_context() -> str:
         else:
             sections.append("Профиль: не заполнен.")
 
-        # --- Вчерашний сон ---
+        # --- Сон за этот день ---
         sleep_stmt = (
             select(SleepLog)
             .where(
                 SleepLog.user_id == user_id,
-                SleepLog.date >= yesterday,
+                SleepLog.date == target,
                 SleepLog.deleted_at.is_(None),
             )
-            .order_by(SleepLog.date.desc())
+            .order_by(SleepLog.created_at.desc())
             .limit(1)
         )
         last_sleep = (await session.execute(sleep_stmt)).scalar_one_or_none()
 
         if last_sleep:
-            parts = [f"Последний сон ({last_sleep.date}):"]
+            parts = [f"Сон ({target_label}):"]
             if last_sleep.duration_minutes:
                 h = last_sleep.duration_minutes / 60
                 parts.append(f"  Длительность: {last_sleep.duration_minutes} мин ({h:.1f}ч)")
@@ -93,16 +97,17 @@ async def get_daily_recommendation_context() -> str:
                 parts.append(f"  Встал: {last_sleep.wake_time.strftime('%H:%M')}")
             sections.append("\n".join(parts))
         else:
-            sections.append("Сон за вчера/сегодня: нет данных.")
+            sections.append(f"Сон ({target_label}): нет данных.")
 
         # --- Средний сон за 7 дней ---
-        week_ago = today - timedelta(days=7)
+        week_ago = target - timedelta(days=7)
         avg_sleep_stmt = select(
             func.avg(SleepLog.duration_minutes),
             func.count(SleepLog.id),
         ).where(
             SleepLog.user_id == user_id,
             SleepLog.date >= week_ago,
+            SleepLog.date <= target,
             SleepLog.deleted_at.is_(None),
             SleepLog.duration_minutes.isnot(None),
         )
@@ -111,21 +116,6 @@ async def get_daily_recommendation_context() -> str:
 
         if avg_sleep:
             sections.append(f"Средний сон за 7 дн.: {int(avg_sleep)} мин ({avg_sleep / 60:.1f}ч), записей: {sleep_count}")
-
-        # --- Питание за вчера ---
-        meals_stmt = select(
-            func.count(MealLog.id),
-            func.sum(MealLog.calories),
-            func.sum(MealLog.protein_g),
-            func.sum(MealLog.carbs_g),
-            func.sum(MealLog.fat_g),
-        ).where(
-            MealLog.user_id == user_id,
-            MealLog.date == yesterday,
-            MealLog.deleted_at.is_(None),
-        )
-        meal_row = (await session.execute(meals_stmt)).one()
-        m_count, m_cal, m_prot, m_carbs, m_fat = meal_row
 
         # --- Цели по питанию из профиля ---
         cal_min, cal_max = None, None
@@ -143,8 +133,23 @@ async def get_daily_recommendation_context() -> str:
             elif g.key == "daily_protein_g":
                 prot_min, prot_max = _parse_goal(g.value)
 
+        # --- Питание за целевой день ---
+        meals_stmt = select(
+            func.count(MealLog.id),
+            func.sum(MealLog.calories),
+            func.sum(MealLog.protein_g),
+            func.sum(MealLog.carbs_g),
+            func.sum(MealLog.fat_g),
+        ).where(
+            MealLog.user_id == user_id,
+            MealLog.date == target,
+            MealLog.deleted_at.is_(None),
+        )
+        meal_row = (await session.execute(meals_stmt)).one()
+        m_count, m_cal, m_prot, m_carbs, m_fat = meal_row
+
         if m_count:
-            meal_parts = [f"Питание вчера ({m_count} приёмов):"]
+            meal_parts = [f"Питание {target_label} ({m_count} приёмов):"]
             if m_cal:
                 cal_str = f"  Калории: {int(m_cal)} ккал"
                 if cal_min and cal_max:
@@ -161,40 +166,41 @@ async def get_daily_recommendation_context() -> str:
                 meal_parts.append(f"  Жиры: {m_fat:.0f}г")
             sections.append("\n".join(meal_parts))
         else:
-            sections.append("Питание вчера: нет данных.")
+            sections.append(f"Питание {target_label}: нет данных.")
 
-        # --- Последняя тренировка ---
+        # --- Тренировки за целевой день ---
         workout_stmt = (
             select(WorkoutLog)
             .where(
                 WorkoutLog.user_id == user_id,
+                WorkoutLog.date == target,
                 WorkoutLog.deleted_at.is_(None),
             )
-            .order_by(WorkoutLog.date.desc())
-            .limit(1)
+            .order_by(WorkoutLog.created_at.desc())
         )
-        last_workout = (await session.execute(workout_stmt)).scalar_one_or_none()
+        workouts = (await session.execute(workout_stmt)).scalars().all()
 
-        if last_workout:
-            days_ago = (today - last_workout.date).days
-            w_parts = [f"Последняя тренировка ({last_workout.date}, {days_ago} дн. назад):"]
-            w_parts.append(f"  Тип: {last_workout.workout_type}")
-            if last_workout.intensity:
-                w_parts.append(f"  Интенсивность: {last_workout.intensity}")
-            if last_workout.duration_minutes:
-                w_parts.append(f"  Длительность: {last_workout.duration_minutes} мин")
-            if last_workout.description:
-                w_parts.append(f"  Описание: {last_workout.description}")
+        if workouts:
+            w_parts = [f"Тренировки {target_label} ({len(workouts)} шт.):"]
+            for w in workouts:
+                line = f"  • {w.workout_type}"
+                if w.intensity:
+                    line += f", {w.intensity}"
+                if w.duration_minutes:
+                    line += f", {w.duration_minutes} мин"
+                if w.description:
+                    line += f" — {w.description}"
+                w_parts.append(line)
             sections.append("\n".join(w_parts))
         else:
-            sections.append("Тренировки: нет записей.")
+            sections.append(f"Тренировки {target_label}: нет записей.")
 
-        # --- Последний Recovery (WHOOP) ---
+        # --- Recovery (WHOOP) за целевой день ---
         recovery_stmt = (
             select(RecoveryLog)
             .where(
                 RecoveryLog.user_id == user_id,
-                RecoveryLog.date >= yesterday,
+                RecoveryLog.date == target,
                 RecoveryLog.source == "whoop_api",
                 RecoveryLog.deleted_at.is_(None),
             )
@@ -205,7 +211,7 @@ async def get_daily_recommendation_context() -> str:
 
         if last_recovery:
             zone = "🟢" if last_recovery.recovery_score >= 67 else "🟡" if last_recovery.recovery_score >= 34 else "🔴"
-            rec_parts = [f"WHOOP Recovery ({last_recovery.date}):"]
+            rec_parts = [f"WHOOP Recovery ({target_label}):"]
             rec_parts.append(f"  {zone} Score: {last_recovery.recovery_score:.0f}%")
             if last_recovery.hrv_ms is not None:
                 rec_parts.append(f"  HRV: {last_recovery.hrv_ms:.1f} ms")
@@ -215,7 +221,7 @@ async def get_daily_recommendation_context() -> str:
                 rec_parts.append(f"  SpO2: {last_recovery.spo2:.0f}%")
             sections.append("\n".join(rec_parts))
         else:
-            sections.append("WHOOP Recovery: нет данных за последние сутки.")
+            sections.append(f"WHOOP Recovery ({target_label}): нет данных.")
 
         # --- Активные наблюдения ---
         rules_stmt = (

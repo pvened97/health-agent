@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 
 from app.agent.tools._context import get_user_id
 from app.database import async_session
-from app.models.logs import SleepLog, MealLog, WorkoutLog, DailyNote
+from app.models.logs import SleepLog, MealLog, WorkoutLog, DailyNote, RecoveryLog
 from app.models.memory import UserProfile, DerivedRule
 
 
@@ -142,6 +142,34 @@ async def get_daily_recommendation_context() -> str:
             sections.append("\n".join(w_parts))
         else:
             sections.append("Тренировки: нет записей.")
+
+        # --- Последний Recovery (WHOOP) ---
+        recovery_stmt = (
+            select(RecoveryLog)
+            .where(
+                RecoveryLog.user_id == user_id,
+                RecoveryLog.date >= yesterday,
+                RecoveryLog.source == "whoop_api",
+                RecoveryLog.deleted_at.is_(None),
+            )
+            .order_by(RecoveryLog.date.desc())
+            .limit(1)
+        )
+        last_recovery = (await session.execute(recovery_stmt)).scalar_one_or_none()
+
+        if last_recovery:
+            zone = "🟢" if last_recovery.recovery_score >= 67 else "🟡" if last_recovery.recovery_score >= 34 else "🔴"
+            rec_parts = [f"WHOOP Recovery ({last_recovery.date}):"]
+            rec_parts.append(f"  {zone} Score: {last_recovery.recovery_score:.0f}%")
+            if last_recovery.hrv_ms is not None:
+                rec_parts.append(f"  HRV: {last_recovery.hrv_ms:.1f} ms")
+            if last_recovery.resting_hr is not None:
+                rec_parts.append(f"  Пульс покоя: {last_recovery.resting_hr:.0f}")
+            if last_recovery.spo2 is not None:
+                rec_parts.append(f"  SpO2: {last_recovery.spo2:.0f}%")
+            sections.append("\n".join(rec_parts))
+        else:
+            sections.append("WHOOP Recovery: нет данных за последние сутки.")
 
         # --- Активные наблюдения ---
         rules_stmt = (

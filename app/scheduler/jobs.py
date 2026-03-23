@@ -144,17 +144,13 @@ async def weekly_streak_check(bot):
             if not tg_account.chat_id:
                 continue
 
-            # Собираем уникальные дни с любыми записями (еда, сон, тренировка)
-            logged_days: set[date] = set()
-
-            for Model in (MealLog, SleepLog, WorkoutLog):
-                stmt_days = select(func.distinct(Model.date)).where(
-                    Model.user_id == user.id,
-                    Model.date.in_(week),
-                    Model.deleted_at.is_(None),
-                )
-                days = (await session.execute(stmt_days)).scalars().all()
-                logged_days.update(days)
+            # Считаем дни с записями о еде (ручной ввод, не автосинхронизация)
+            stmt_days = select(func.distinct(MealLog.date)).where(
+                MealLog.user_id == user.id,
+                MealLog.date.in_(week),
+                MealLog.deleted_at.is_(None),
+            )
+            logged_days = (await session.execute(stmt_days)).scalars().all()
 
             if len(logged_days) >= 7:
                 try:

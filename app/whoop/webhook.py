@@ -142,10 +142,15 @@ async def handle_webhook(payload: dict) -> str:
             logger.info("WHOOP webhook synced sleep: %d records", synced)
 
         elif event_type == "recovery.updated":
-            # For recovery, id is the sleep UUID — fetch recovery by cycle
-            record = await client.get_recovery_by_cycle_id(object_id)
-            synced = await _sync_recovery(user_id, [record])
-            logger.info("WHOOP webhook synced recovery: %d records", synced)
+            # Webhook id = sleep UUID, но recovery API требует cycle_id.
+            # Берём последний recovery через list endpoint.
+            records = await client.get_recovery(limit=1)
+            if records:
+                synced = await _sync_recovery(user_id, records)
+                logger.info("WHOOP webhook synced recovery: %d records", synced)
+            else:
+                synced = 0
+                logger.warning("WHOOP webhook: no recovery records returned")
 
             # Триггерим утреннюю сводку — recovery пришёл, значит данные готовы
             if synced:

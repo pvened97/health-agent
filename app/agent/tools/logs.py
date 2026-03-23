@@ -248,21 +248,81 @@ async def get_recent_logs(
 
     lines = []
     for row in rows:
+        rid = str(row.id)[:8]
         if log_type == "sleep":
             dur = f", {row.duration_minutes} мин" if row.duration_minutes else ""
             qual = f", качество: {row.quality}" if row.quality else ""
-            lines.append(f"  {row.date}: сон{dur}{qual}")
+            lines.append(f"  [{rid}] {row.date}: сон{dur}{qual}")
         elif log_type == "meal":
             cal = f", ~{row.calories} ккал" if row.calories else ""
             prot = f", белок {row.protein_g}г" if row.protein_g else ""
-            lines.append(f"  {row.date} {row.meal_type or ''}: {row.description}{cal}{prot}")
+            lines.append(f"  [{rid}] {row.date} {row.meal_type or ''}: {row.description}{cal}{prot}")
         elif log_type == "workout":
             dur = f", {row.duration_minutes} мин" if row.duration_minutes else ""
             inten = f", {row.intensity}" if row.intensity else ""
-            lines.append(f"  {row.date}: {row.workout_type}{dur}{inten}")
+            lines.append(f"  [{rid}] {row.date}: {row.workout_type}{dur}{inten}")
         elif log_type == "note":
             mood = f", настроение: {row.mood}" if row.mood else ""
-            lines.append(f"  {row.date}: {row.text}{mood}")
+            lines.append(f"  [{rid}] {row.date}: {row.text}{mood}")
 
     header = f"Записи '{log_type}' {period_desc} ({len(rows)} шт.):"
     return header + "\n" + "\n".join(lines)
+
+
+@function_tool
+async def delete_log(
+    log_type: str,
+    log_id_prefix: str,
+) -> str:
+    """Удаляет запись из журнала (soft delete). Используй когда пользователь просит удалить или исправить неправильную запись.
+    Перед удалением ОБЯЗАТЕЛЬНО вызови get_recent_logs чтобы найти ID записи.
+
+    Args:
+        log_type: Тип записи: sleep, meal, workout, note
+        log_id_prefix: Начало ID записи (первые 8 символов из вывода get_recent_logs, например "a1b2c3d4")
+    """
+    from datetime import datetime as dt
+
+    user_id = get_user_id()
+
+    model_map = {
+        "sleep": SleepLog,
+        "meal": MealLog,
+        "workout": WorkoutLog,
+        "note": DailyNote,
+    }
+
+    model = model_map.get(log_type)
+    if not model:
+        return f"Неизвестный тип: {log_type}. Доступные: sleep, meal, workout, note."
+
+    async with async_session() as session:
+        stmt = (
+            select(model)
+            .where(
+                model.user_id == user_id,
+                model.deleted_at.is_(None),
+            )
+        )
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+
+        # Ищем запись по префиксу ID
+        matched = [r for r in rows if str(r.id).startswith(log_id_prefix)]
+
+        if not matched:
+            return f"Запись с ID '{log_id_prefix}...' не найдена."
+        if len(matched) > 1:
+            return f"Найдено {len(matched)} записей с таким префиксом. Укажи более длинный ID."
+
+        record = matched[0]
+        record.deleted_at = dt.now()
+        await session.commit()
+
+        desc = ""
+        if log_type == "meal" and hasattr(record, "description"):
+            desc = f" ({record.description})"
+        elif log_type == "workout" and hasattr(record, "workout_type"):
+            desc = f" ({record.workout_type})"
+
+        return f"Запись {log_type}{desc} за {record.date} удалена."

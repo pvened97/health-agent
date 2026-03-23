@@ -101,7 +101,10 @@ async def _sync_sleep(user_id: uuid.UUID, records: list[dict]) -> int:
             external_id = f"whoop_sleep_{rec['id']}"
 
             existing = await session.execute(
-                select(SleepLog).where(SleepLog.external_id == external_id)
+                select(SleepLog).where(
+                    SleepLog.external_id == external_id,
+                    SleepLog.deleted_at.is_(None),
+                )
             )
             if existing.scalar_one_or_none():
                 continue
@@ -166,7 +169,10 @@ async def _sync_recovery(user_id: uuid.UUID, records: list[dict]) -> int:
             external_id = f"whoop_recovery_{rec['cycle_id']}"
 
             existing = await session.execute(
-                select(RecoveryLog).where(RecoveryLog.external_id == external_id)
+                select(RecoveryLog).where(
+                    RecoveryLog.external_id == external_id,
+                    RecoveryLog.deleted_at.is_(None),
+                )
             )
             if existing.scalar_one_or_none():
                 continue
@@ -206,7 +212,10 @@ async def _sync_workouts(user_id: uuid.UUID, records: list[dict]) -> int:
             external_id = f"whoop_workout_{rec['id']}"
 
             existing = await session.execute(
-                select(WorkoutLog).where(WorkoutLog.external_id == external_id)
+                select(WorkoutLog).where(
+                    WorkoutLog.external_id == external_id,
+                    WorkoutLog.deleted_at.is_(None),
+                )
             )
             if existing.scalar_one_or_none():
                 continue

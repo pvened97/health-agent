@@ -338,7 +338,13 @@ async def get_week_summary(weeks_ago: int = 0) -> str:
             if avg_cal:
                 meal_lines.append(f"  Среднее: ~{avg_cal} ккал/день{cal_delta}")
             if avg_prot:
-                meal_lines.append(f"  Белок: ~{avg_prot}г/день")
+                prot_delta = ""
+                if pm_prot and pm_days:
+                    prev_avg_prot = round(pm_prot / pm_days, 1)
+                    diff = round(avg_prot - prev_avg_prot, 1)
+                    sign = "+" if diff > 0 else ""
+                    prot_delta = f" (дельта: {sign}{diff}г)"
+                meal_lines.append(f"  Белок: ~{avg_prot}г/день{prot_delta}")
 
             total_days = (end - start).days + 1
             missing_days = total_days - m_days
@@ -363,7 +369,7 @@ async def get_week_summary(weeks_ago: int = 0) -> str:
             return (await session.execute(stmt)).one()
 
         w_count, w_total_min = await _workout_stats(start, end)
-        pw_count, _ = await _workout_stats(prev_start, prev_end)
+        pw_count, pw_total_min = await _workout_stats(prev_start, prev_end)
 
         if w_count:
             w_delta = ""
@@ -372,6 +378,12 @@ async def get_week_summary(weeks_ago: int = 0) -> str:
                 if diff != 0:
                     sign = "+" if diff > 0 else ""
                     w_delta = f" (дельта: {sign}{diff})"
+            w_min_delta = ""
+            if w_total_min and pw_total_min:
+                diff = w_total_min - pw_total_min
+                if diff != 0:
+                    sign = "+" if diff > 0 else ""
+                    w_min_delta = f" (дельта: {sign}{int(diff)} мин)"
 
             # Типы тренировок
             types_stmt = select(
@@ -388,11 +400,58 @@ async def get_week_summary(weeks_ago: int = 0) -> str:
 
             sections.append(
                 f"\nТренировки: {w_count} шт.{w_delta}"
-                f"\n  Общее время: {w_total_min or '?'} мин"
+                f"\n  Общее время: {w_total_min or '?'} мин{w_min_delta}"
                 f"\n  Типы: {types_str}"
             )
         else:
             sections.append("\nТренировки: нет записей.")
+
+        # === RECOVERY (WHOOP) ===
+        async def _recovery_stats(d_from: date, d_to: date):
+            stmt = select(
+                func.count(RecoveryLog.id),
+                func.avg(RecoveryLog.recovery_score),
+                func.avg(RecoveryLog.hrv_ms),
+                func.avg(RecoveryLog.resting_hr),
+            ).where(
+                RecoveryLog.user_id == user_id,
+                RecoveryLog.date >= d_from,
+                RecoveryLog.date <= d_to,
+                RecoveryLog.source == "whoop_api",
+                RecoveryLog.deleted_at.is_(None),
+            )
+            return (await session.execute(stmt)).one()
+
+        r_count, r_avg_score, r_avg_hrv, r_avg_hr = await _recovery_stats(start, end)
+        pr_count, pr_avg_score, pr_avg_hrv, pr_avg_hr = await _recovery_stats(prev_start, prev_end)
+
+        if r_count and r_avg_score:
+            rec_lines = [f"\nWHOOP Recovery ({r_count} записей):"]
+
+            score_delta = ""
+            if pr_avg_score:
+                diff = r_avg_score - pr_avg_score
+                sign = "+" if diff > 0 else ""
+                score_delta = f" (дельта: {sign}{diff:.0f}%)"
+            rec_lines.append(f"  Средний recovery: {r_avg_score:.0f}%{score_delta}")
+
+            if r_avg_hrv:
+                hrv_delta = ""
+                if pr_avg_hrv:
+                    diff = r_avg_hrv - pr_avg_hrv
+                    sign = "+" if diff > 0 else ""
+                    hrv_delta = f" (дельта: {sign}{diff:.1f})"
+                rec_lines.append(f"  Средний HRV: {r_avg_hrv:.1f} ms{hrv_delta}")
+
+            if r_avg_hr:
+                hr_delta = ""
+                if pr_avg_hr:
+                    diff = r_avg_hr - pr_avg_hr
+                    sign = "+" if diff > 0 else ""
+                    hr_delta = f" (дельта: {sign}{diff:.0f})"
+                rec_lines.append(f"  Средний пульс покоя: {r_avg_hr:.0f}{hr_delta}")
+
+            sections.append("\n".join(rec_lines))
 
         # === САМОЧУВСТВИЕ ===
         note_stmt = select(

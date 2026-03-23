@@ -3,6 +3,8 @@
 import logging
 from datetime import date, datetime, timedelta, timezone
 
+from app.config import today_msk
+
 from sqlalchemy import select, func
 
 from app.database import async_session
@@ -130,7 +132,7 @@ async def evening_summary(bot):
 
 async def weekly_streak_check(bot):
     """Проверяет недельный streak — 7 дней подряд с записями."""
-    today = date.today()
+    today = today_msk()
     week = [today - timedelta(days=i) for i in range(1, 8)]  # последние 7 дней
 
     async with async_session() as session:
@@ -169,7 +171,7 @@ async def weekly_streak_check(bot):
 
 async def sleep_trend_check(bot):
     """Сравнивает средний сон за прошлую неделю с позапрошлой."""
-    today = date.today()
+    today = today_msk()
     # Прошлая неделя: пн–вс
     last_monday = today - timedelta(days=today.weekday() + 7)
     last_sunday = last_monday + timedelta(days=6)

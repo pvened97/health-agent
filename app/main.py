@@ -65,34 +65,37 @@ async def lifespan(app: FastAPI):
         weekly_summary,
     )
 
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(settings.timezone)
+
+    scheduler = AsyncIOScheduler(timezone=tz)
 
     # Обновление WHOOP токенов — каждый час
-    scheduler.add_job(refresh_whoop_tokens, CronTrigger(minute=0), id="refresh_tokens")
+    scheduler.add_job(refresh_whoop_tokens, CronTrigger(minute=0, timezone=tz), id="refresh_tokens")
 
-    # Ночная синхронизация WHOOP — 03:00
-    scheduler.add_job(nightly_whoop_sync, CronTrigger(hour=3, minute=0), id="nightly_sync")
+    # Ночная синхронизация WHOOP — 03:00 Мск
+    scheduler.add_job(nightly_whoop_sync, CronTrigger(hour=3, minute=0, timezone=tz), id="nightly_sync")
 
-    # Вечерний итог дня — 22:00
+    # Вечерний итог дня — 22:00 Мск
     bot = _bot_app.bot
     scheduler.add_job(
-        evening_summary, CronTrigger(hour=22, minute=0),
+        evening_summary, CronTrigger(hour=22, minute=0, timezone=tz),
         args=[bot], id="evening_summary",
     )
 
-    # Недельный streak + тренд сна — понедельник 10:00
+    # Недельный streak + тренд сна — понедельник 10:00 Мск
     scheduler.add_job(
-        weekly_streak_check, CronTrigger(day_of_week="mon", hour=10, minute=0),
+        weekly_streak_check, CronTrigger(day_of_week="mon", hour=10, minute=0, timezone=tz),
         args=[bot], id="weekly_streak",
     )
     scheduler.add_job(
-        sleep_trend_check, CronTrigger(day_of_week="mon", hour=10, minute=5),
+        sleep_trend_check, CronTrigger(day_of_week="mon", hour=10, minute=5, timezone=tz),
         args=[bot], id="sleep_trend",
     )
 
-    # Недельный обзор — воскресенье 20:00
+    # Недельный обзор — воскресенье 20:00 Мск
     scheduler.add_job(
-        weekly_summary, CronTrigger(day_of_week="sun", hour=20, minute=0),
+        weekly_summary, CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=tz),
         args=[bot], id="weekly_summary",
     )
 

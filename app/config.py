@@ -1,3 +1,6 @@
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
 from pydantic_settings import BaseSettings
 
 
@@ -26,8 +29,21 @@ class Settings(BaseSettings):
     # App
     app_env: str = "dev"
     log_level: str = "INFO"
+    timezone: str = "Europe/Moscow"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
 settings = Settings()
+
+_tz = ZoneInfo(settings.timezone)
+
+
+def now_msk() -> datetime:
+    """Текущее время в московском часовом поясе."""
+    return datetime.now(_tz)
+
+
+def today_msk() -> date:
+    """Сегодняшняя дата по Москве."""
+    return now_msk().date()

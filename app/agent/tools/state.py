@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+from app.config import today_msk
+
 from agents import function_tool
 from sqlalchemy import select, func
 
@@ -17,7 +19,7 @@ async def get_current_state(days: int = 7) -> str:
         days: За сколько последних дней агрегировать (по умолчанию 7)
     """
     user_id = get_user_id()
-    since = date.today() - timedelta(days=days)
+    since = today_msk() - timedelta(days=days)
     parts = [f"Агрегаты за последние {days} дней:"]
 
     async with async_session() as session:

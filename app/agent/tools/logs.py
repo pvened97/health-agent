@@ -1,6 +1,8 @@
 from datetime import date, time, datetime
 from typing import Optional
 
+from app.config import today_msk
+
 from agents import function_tool
 from sqlalchemy import select
 
@@ -224,7 +226,7 @@ async def get_recent_logs(
         date_filter = model.date == target_date
         period_desc = f"за {specific_date}"
     else:
-        since = date.today() - timedelta(days=days)
+        since = today_msk() - timedelta(days=days)
         date_filter = model.date >= since
         period_desc = f"за последние {days} дней"
 

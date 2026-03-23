@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+from app.config import today_msk
+
 from agents import function_tool
 from sqlalchemy import select
 
@@ -20,7 +22,7 @@ async def search_meal_catalog(meal_date: str | None = None, query: str | None = 
         query: Поиск по названию блюда (необязательно)
     """
     user_id = get_user_id()
-    target_date = date.fromisoformat(meal_date) if meal_date else date.today()
+    target_date = date.fromisoformat(meal_date) if meal_date else today_msk()
 
     async with async_session() as session:
         stmt = (

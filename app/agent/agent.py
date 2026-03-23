@@ -48,7 +48,8 @@ _conversation_history: dict[str, list] = defaultdict(list)
 @function_tool
 def get_today_date() -> str:
     """Возвращает сегодняшнюю дату в формате YYYY-MM-DD. Вызывай перед сохранением записей, чтобы знать текущую дату."""
-    return datetime.now().strftime("%Y-%m-%d")
+    from app.config import today_msk
+    return today_msk().isoformat()
 
 
 BASE_SYSTEM_PROMPT = """Ты — персональный ассистент: нутрициолог, тренер и специалист по восстановлению в одном.

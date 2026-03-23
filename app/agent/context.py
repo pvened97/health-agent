@@ -3,6 +3,8 @@
 import uuid
 from datetime import date, timedelta
 
+from app.config import today_msk
+
 from sqlalchemy import select, func
 
 from app.database import async_session
@@ -56,7 +58,7 @@ async def build_user_context(user_id: uuid.UUID) -> str:
             sections.append("Профиль пользователя:\n" + "\n".join(profile_lines))
 
         # --- Последний сон ---
-        yesterday = date.today() - timedelta(days=1)
+        yesterday = today_msk() - timedelta(days=1)
         sleep_stmt = (
             select(SleepLog)
             .where(
@@ -78,7 +80,7 @@ async def build_user_context(user_id: uuid.UUID) -> str:
             sections.append("\n".join(sleep_parts))
 
         # --- Питание за сегодня ---
-        today = date.today()
+        today = today_msk()
         meals_stmt = select(
             func.count(MealLog.id),
             func.sum(MealLog.calories),

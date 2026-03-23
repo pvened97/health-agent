@@ -1,6 +1,8 @@
 import re
 from datetime import date, timedelta
 
+from app.config import today_msk
+
 from agents import function_tool
 from sqlalchemy import select, func
 
@@ -41,7 +43,7 @@ async def get_daily_recommendation_context(target_date: str = "") -> str:
         target_date: Дата в формате YYYY-MM-DD. Если не указана — используется сегодня.
     """
     user_id = get_user_id()
-    today = date.today()
+    today = today_msk()
     target = date.fromisoformat(target_date) if target_date else today
     target_label = "сегодня" if target == today else ("вчера" if target == today - timedelta(days=1) else str(target))
     sections = []
@@ -253,7 +255,7 @@ async def get_week_summary(weeks_ago: int = 0) -> str:
         weeks_ago: 0 = текущая неделя (пн–сегодня), 1 = прошлая неделя и т.д.
     """
     user_id = get_user_id()
-    today = date.today()
+    today = today_msk()
 
     # Определяем границы недели (пн-вс)
     current_monday = today - timedelta(days=today.weekday())

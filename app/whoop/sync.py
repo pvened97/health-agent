@@ -4,6 +4,8 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone, date
 
+from app.config import today_msk
+
 from sqlalchemy import select
 
 from app.database import async_session
@@ -118,7 +120,7 @@ async def _sync_sleep(user_id: uuid.UUID, records: list[dict]) -> int:
 
             log = SleepLog(
                 user_id=user_id,
-                date=start_dt.date() if start_dt else date.today(),
+                date=start_dt.date() if start_dt else today_msk(),
                 bed_time=start_dt,
                 wake_time=end_dt,
                 duration_minutes=_ms_to_minutes(total_sleep_ms) if total_sleep_ms else None,
@@ -163,7 +165,7 @@ async def _sync_recovery(user_id: uuid.UUID, records: list[dict]) -> int:
 
             log = RecoveryLog(
                 user_id=user_id,
-                date=created.date() if created else date.today(),
+                date=created.date() if created else today_msk(),
                 recovery_score=score.get("recovery_score"),
                 hrv_ms=score.get("hrv_rmssd_milli"),
                 resting_hr=score.get("resting_heart_rate"),
@@ -217,7 +219,7 @@ async def _sync_workouts(user_id: uuid.UUID, records: list[dict]) -> int:
 
             log = WorkoutLog(
                 user_id=user_id,
-                date=start_dt.date() if start_dt else date.today(),
+                date=start_dt.date() if start_dt else today_msk(),
                 started_at=start_dt,
                 ended_at=end_dt,
                 duration_minutes=duration,

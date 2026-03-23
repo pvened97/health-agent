@@ -29,15 +29,14 @@ def verify_signature(raw_body: bytes, signature: str, timestamp: str) -> bool:
 
 async def _trigger_morning_checkin(user_id: int) -> None:
     """Отправляет утреннюю сводку после получения recovery данных."""
-    from datetime import date
-
     from sqlalchemy import select
 
+    from app.config import today_msk
     from app.database import async_session
     from app.models.logs import SleepLog, RecoveryLog
     from app.models.user import TelegramAccount
 
-    today = date.today()
+    today = today_msk()
 
     async with async_session() as session:
         # Проверяем: есть ли сон и recovery за сегодня

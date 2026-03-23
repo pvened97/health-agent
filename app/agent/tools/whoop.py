@@ -3,6 +3,8 @@
 import logging
 from datetime import timedelta, date, timezone, datetime
 
+from app.config import today_msk
+
 from agents import function_tool
 from sqlalchemy import select
 
@@ -52,7 +54,7 @@ async def get_latest_whoop_metrics(days: int = 3) -> str:
     сон (стадии), тренировки со strain.
     Вызывай, когда пользователь спрашивает о recovery, HRV, strain, пульсе покоя, данных с браслета."""
     user_id = get_user_id()
-    since = date.today() - timedelta(days=days)
+    since = today_msk() - timedelta(days=days)
     lines = []
 
     async with async_session() as session:

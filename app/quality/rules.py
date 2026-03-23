@@ -5,6 +5,8 @@
 
 import uuid
 from datetime import date, timedelta
+
+from app.config import today_msk
 from dataclasses import dataclass
 
 from sqlalchemy import select, func
@@ -24,7 +26,7 @@ async def check_all_rules(user_id: uuid.UUID) -> list[QualityWarning]:
     warnings: list[QualityWarning] = []
 
     async with async_session() as session:
-        today = date.today()
+        today = today_msk()
 
         # --- Правило 1: сон < 6ч три дня подряд ---
         three_days_ago = today - timedelta(days=3)

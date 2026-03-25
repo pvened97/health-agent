@@ -47,17 +47,19 @@ Health Agent/
 │   │   └── agent.py        # agent_runs, tool_calls
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── agent.py        # OpenAI Agent definition
-│   │   ├── tools/          # Function tools
-│   │   │   ├── __init__.py
-│   │   │   ├── profile.py  # get/update profile
-│   │   │   ├── logs.py     # save/get sleep, meal, workout
-│   │   │   ├── memory.py   # memory management
-│   │   │   ├── state.py    # current state, aggregates
-│   │   │   ├── summary.py  # daily/weekly summaries
-│   │   │   └── whoop.py    # whoop data access
-│   │   ├── prompts.py      # System instructions builder
-│   │   └── context.py      # Selective memory injection
+│   │   ├── agent.py        # OpenAI Agent definition + system prompt
+│   │   ├── router.py       # Model router (strong/fast by message content)
+│   │   ├── context.py      # Selective memory injection into system prompt
+│   │   └── tools/          # Function tools
+│   │       ├── __init__.py
+│   │       ├── _context.py # ContextVar for current user_id
+│   │       ├── profile.py  # get/update profile
+│   │       ├── logs.py     # save/get/delete sleep, meal, workout, notes
+│   │       ├── memory.py   # profile CRUD, derived rules
+│   │       ├── state.py    # current state, aggregates
+│   │       ├── summary.py  # daily/weekly summaries with goal progress
+│   │       ├── catalog.py  # meal delivery catalog search
+│   │       └── whoop.py    # whoop status, sync, metrics
 │   ├── telegram/
 │   │   ├── __init__.py
 │   │   ├── bot.py          # Bot setup
@@ -147,6 +149,7 @@ pytest tests/
 ## User
 
 - Один пользователь в MVP
-- Модель GPT-5.4
+- Модель GPT-5.4 (strong) / GPT-5.4-mini (fast) через роутер
 - Telegram как основной канал
-- WHOOP интеграция будет добавлена на этапе 3
+- WHOOP интеграция подключена (OAuth, webhooks, синхронизация)
+- APScheduler: вечерний итог, недельный обзор, streak, тренд сна, token refresh

@@ -4,21 +4,19 @@ import os
 import time
 import uuid
 from collections import defaultdict
+from datetime import datetime
 
 from agents import Agent, Runner, function_tool
 from agents.items import ToolCallItem, ToolCallOutputItem
-from datetime import datetime
-
-from app.database import async_session
-from app.models.agent import AgentRun, ToolCall
-
-logger = logging.getLogger(__name__)
 
 from app.config import settings
-
-# Agents SDK берёт ключ из переменной окружения
-os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+from app.database import async_session
+from app.models.agent import AgentRun, ToolCall
 from app.agent.tools._context import set_user_id, get_user_id
+
+# Agents SDK reads the key from env
+os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)
+
 from app.agent.tools.profile import get_user_profile
 from app.agent.tools.logs import (
     save_sleep_log,
@@ -39,6 +37,8 @@ from app.agent.tools.catalog import search_meal_catalog
 from app.agent.tools.whoop import get_whoop_status, sync_whoop_now, get_latest_whoop_metrics
 from app.agent.context import build_user_context
 from app.agent.router import choose_model
+
+logger = logging.getLogger(__name__)
 
 MAX_HISTORY_ITEMS = 5
 

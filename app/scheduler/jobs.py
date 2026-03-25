@@ -28,6 +28,16 @@ async def _send_html(bot, chat_id: int, text: str) -> None:
         await bot.send_message(chat_id=chat_id, text=text)
 
 
+async def _get_users_with_telegram() -> list[tuple]:
+    """Возвращает пары (User, TelegramAccount) для всех пользователей с привязанным Telegram."""
+    async with async_session() as session:
+        stmt = (
+            select(User, TelegramAccount)
+            .join(TelegramAccount, TelegramAccount.user_id == User.id)
+        )
+        return (await session.execute(stmt)).all()
+
+
 async def refresh_whoop_tokens():
     """Обновляет WHOOP токены, которые истекают в ближайший час."""
     from app.whoop.oauth import refresh_access_token
@@ -74,14 +84,7 @@ async def morning_checkin(bot):
     """Утренний check-in: recovery + рекомендация на день."""
     from app.agent.agent import run_agent
 
-    async with async_session() as session:
-        stmt = (
-            select(User, TelegramAccount)
-            .join(TelegramAccount, TelegramAccount.user_id == User.id)
-        )
-        rows = (await session.execute(stmt)).all()
-
-    for user, tg_account in rows:
+    for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
         try:
@@ -100,14 +103,7 @@ async def evening_summary(bot):
     """Вечерний итог дня: тренировки и питание за сегодня."""
     from app.agent.agent import run_agent
 
-    async with async_session() as session:
-        stmt = (
-            select(User, TelegramAccount)
-            .join(TelegramAccount, TelegramAccount.user_id == User.id)
-        )
-        rows = (await session.execute(stmt)).all()
-
-    for user, tg_account in rows:
+    for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
         try:
@@ -131,13 +127,7 @@ async def weekly_streak_check(bot):
     week = [today - timedelta(days=i) for i in range(1, 8)]  # последние 7 дней
 
     async with async_session() as session:
-        stmt = (
-            select(User, TelegramAccount)
-            .join(TelegramAccount, TelegramAccount.user_id == User.id)
-        )
-        rows = (await session.execute(stmt)).all()
-
-        for user, tg_account in rows:
+        for user, tg_account in await _get_users_with_telegram():
             if not tg_account.chat_id:
                 continue
 
@@ -174,22 +164,16 @@ async def sleep_trend_check(bot):
     prev_sunday = last_monday - timedelta(days=1)
 
     async with async_session() as session:
-        stmt = (
-            select(User, TelegramAccount)
-            .join(TelegramAccount, TelegramAccount.user_id == User.id)
-        )
-        rows = (await session.execute(stmt)).all()
-
-        for user, tg_account in rows:
+        for user, tg_account in await _get_users_with_telegram():
             if not tg_account.chat_id:
                 continue
 
-            async def _avg_sleep(d_from: date, d_to: date) -> tuple[float | None, int]:
+            async def _avg_sleep(user_id, d_from: date, d_to: date) -> tuple[float | None, int]:
                 s = select(
                     func.avg(SleepLog.duration_minutes),
                     func.count(SleepLog.id),
                 ).where(
-                    SleepLog.user_id == user.id,
+                    SleepLog.user_id == user_id,
                     SleepLog.date >= d_from,
                     SleepLog.date <= d_to,
                     SleepLog.deleted_at.is_(None),
@@ -198,8 +182,8 @@ async def sleep_trend_check(bot):
                 row = (await session.execute(s)).one()
                 return row[0], row[1]
 
-            last_avg, last_count = await _avg_sleep(last_monday, last_sunday)
-            prev_avg, prev_count = await _avg_sleep(prev_monday, prev_sunday)
+            last_avg, last_count = await _avg_sleep(user.id, last_monday, last_sunday)
+            prev_avg, prev_count = await _avg_sleep(user.id, prev_monday, prev_sunday)
 
             # Нужно минимум 3 записи за каждую неделю для сравнения
             if not last_avg or not prev_avg or last_count < 3 or prev_count < 3:
@@ -245,14 +229,7 @@ async def weekly_summary(bot):
     """Воскресный недельный обзор."""
     from app.agent.agent import run_agent
 
-    async with async_session() as session:
-        stmt = (
-            select(User, TelegramAccount)
-            .join(TelegramAccount, TelegramAccount.user_id == User.id)
-        )
-        rows = (await session.execute(stmt)).all()
-
-    for user, tg_account in rows:
+    for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
         try:

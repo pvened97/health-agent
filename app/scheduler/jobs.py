@@ -3,16 +3,29 @@
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from app.config import today_msk
-
 from sqlalchemy import select, func
+from telegram.constants import ParseMode
 
+from app.config import today_msk
 from app.database import async_session
 from app.models.user import User, TelegramAccount
-from app.models.logs import SleepLog, MealLog, WorkoutLog
+from app.models.logs import SleepLog, MealLog
 from app.models.whoop import WhoopConnection
+from app.telegram.handlers import _md_to_html
 
 logger = logging.getLogger(__name__)
+
+
+async def _send_html(bot, chat_id: int, text: str) -> None:
+    """Отправляет сообщение в Telegram с HTML-форматированием, fallback на plain text."""
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=_md_to_html(text),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        await bot.send_message(chat_id=chat_id, text=text)
 
 
 async def refresh_whoop_tokens():
@@ -77,16 +90,7 @@ async def morning_checkin(bot):
                 user_id=user.id,
                 trigger="scheduler",
             )
-            from app.telegram.handlers import _md_to_html
-            from telegram.constants import ParseMode
-            try:
-                await bot.send_message(
-                    chat_id=tg_account.chat_id,
-                    text=_md_to_html(response),
-                    parse_mode=ParseMode.HTML,
-                )
-            except Exception:
-                await bot.send_message(chat_id=tg_account.chat_id, text=response)
+            await _send_html(bot, tg_account.chat_id, response)
             logger.info("Morning check-in sent to user %s", user.id)
         except Exception:
             logger.exception("Morning check-in failed for user %s", user.id)
@@ -115,16 +119,7 @@ async def evening_summary(bot):
                 user_id=user.id,
                 trigger="scheduler",
             )
-            from app.telegram.handlers import _md_to_html
-            from telegram.constants import ParseMode
-            try:
-                await bot.send_message(
-                    chat_id=tg_account.chat_id,
-                    text=_md_to_html(response),
-                    parse_mode=ParseMode.HTML,
-                )
-            except Exception:
-                await bot.send_message(chat_id=tg_account.chat_id, text=response)
+            await _send_html(bot, tg_account.chat_id, response)
             logger.info("Evening summary sent to user %s", user.id)
         except Exception:
             logger.exception("Evening summary failed for user %s", user.id)
@@ -156,7 +151,6 @@ async def weekly_streak_check(bot):
 
             if len(logged_days) >= 7:
                 try:
-                    from telegram.constants import ParseMode
                     await bot.send_message(
                         chat_id=tg_account.chat_id,
                         text="<b>7 дней подряд с записями!</b> 🔥\n\n"
@@ -237,7 +231,6 @@ async def sleep_trend_check(bot):
                 text += " Стоит обратить внимание — недосып накапливается."
 
             try:
-                from telegram.constants import ParseMode
                 await bot.send_message(
                     chat_id=tg_account.chat_id,
                     text=text,
@@ -274,16 +267,7 @@ async def weekly_summary(bot):
                 user_id=user.id,
                 trigger="scheduler",
             )
-            from app.telegram.handlers import _md_to_html
-            from telegram.constants import ParseMode
-            try:
-                await bot.send_message(
-                    chat_id=tg_account.chat_id,
-                    text=_md_to_html(response),
-                    parse_mode=ParseMode.HTML,
-                )
-            except Exception:
-                await bot.send_message(chat_id=tg_account.chat_id, text=response)
+            await _send_html(bot, tg_account.chat_id, response)
             logger.info("Weekly summary sent to user %s", user.id)
         except Exception:
             logger.exception("Weekly summary failed for user %s", user.id)

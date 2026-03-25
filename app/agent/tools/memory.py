@@ -1,11 +1,12 @@
+from datetime import datetime
 from typing import Optional
 
 from agents import function_tool
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.agent.tools._context import get_user_id
 from app.database import async_session
-from app.models.memory import UserProfile, MemoryNote, DerivedRule
+from app.models.memory import UserProfile, DerivedRule
 
 
 @function_tool
@@ -64,8 +65,6 @@ async def delete_memory_item(
         item_type: Тип записи: profile или derived_rule
         key: Для profile — ключ факта (например: allergy). Для derived_rule — текст правила или его начало.
     """
-    from datetime import datetime
-
     user_id = get_user_id()
 
     async with async_session() as session:

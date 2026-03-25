@@ -5,7 +5,16 @@ import hashlib
 import hmac
 import logging
 
-from app.config import settings
+from sqlalchemy import select
+from telegram import Bot
+from telegram.constants import ParseMode
+
+from app.config import settings, today_msk
+from app.database import async_session
+from app.models.agent import AgentRun
+from app.models.logs import SleepLog, RecoveryLog
+from app.models.user import TelegramAccount
+from app.telegram.handlers import _md_to_html
 from app.whoop.client import get_whoop_client_by_whoop_user_id
 from app.whoop.sync import _sync_sleep, _sync_recovery, _sync_workouts
 
@@ -29,13 +38,6 @@ def verify_signature(raw_body: bytes, signature: str, timestamp: str) -> bool:
 
 async def _trigger_morning_checkin(user_id: int) -> None:
     """Отправляет утреннюю сводку после получения recovery данных."""
-    from sqlalchemy import select
-
-    from app.config import today_msk
-    from app.database import async_session
-    from app.models.logs import SleepLog, RecoveryLog
-    from app.models.user import TelegramAccount
-
     today = today_msk()
 
     async with async_session() as session:
@@ -63,7 +65,6 @@ async def _trigger_morning_checkin(user_id: int) -> None:
             return
 
         # Проверяем что сводку сегодня ещё не отправляли (по agent_runs)
-        from app.models.agent import AgentRun
         already_sent = (await session.execute(
             select(AgentRun.id).where(
                 AgentRun.user_id == user_id,
@@ -91,10 +92,6 @@ async def _trigger_morning_checkin(user_id: int) -> None:
             user_id=user_id,
             trigger="recovery_webhook",
         )
-
-        from app.telegram.handlers import _md_to_html
-        from telegram import Bot
-        from telegram.constants import ParseMode
 
         bot = Bot(token=settings.telegram_bot_token)
         try:

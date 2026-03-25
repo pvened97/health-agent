@@ -166,7 +166,7 @@ async def handle_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     from sqlalchemy import select
-    from app.database import async_session
+    from app.database import async_session  # lazy import — avoid circular dependency with bot.py
     from app.models.whoop import WhoopConnection
 
     async with async_session() as session:

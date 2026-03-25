@@ -226,9 +226,10 @@ async def get_recent_logs(
         date_filter = model.date == target_date
         period_desc = f"за {specific_date}"
     else:
-        since = today_msk() - timedelta(days=days)
+        # days=1 → только сегодня, days=7 → сегодня и 6 дней назад
+        since = today_msk() - timedelta(days=days - 1)
         date_filter = model.date >= since
-        period_desc = f"за последние {days} дней"
+        period_desc = f"за последние {days} дн."
 
     async with async_session() as session:
         stmt = (

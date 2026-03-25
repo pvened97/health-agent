@@ -2,16 +2,18 @@
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone, date
-
-from app.config import today_msk
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from app.config import settings, today_msk
 from app.database import async_session
 from app.models.logs import SleepLog, RecoveryLog, WorkoutLog
 from app.models.whoop import SyncEvent
 from app.whoop.client import get_whoop_client
+
+_tz = ZoneInfo(settings.timezone)
 
 logger = logging.getLogger(__name__)
 
@@ -100,21 +102,15 @@ async def _sync_sleep(user_id: uuid.UUID, records: list[dict]) -> int:
             # v2 uses UUID string IDs
             external_id = f"whoop_sleep_{rec['id']}"
 
-            existing = await session.execute(
-                select(SleepLog).where(
-                    SleepLog.external_id == external_id,
-                    SleepLog.deleted_at.is_(None),
-                )
-            )
-            if existing.scalar_one_or_none():
-                continue
-
             score = rec.get("score", {})
             stage = score.get("stage_summary", {})
 
             start_dt = _parse_iso(rec.get("start"))
             end_dt = _parse_iso(rec.get("end"))
 
+            # Общее время в кровати (от засыпания до пробуждения)
+            total_in_bed_ms = stage.get("total_in_bed_time_milli")
+            # Чистое время сна (без awake) — для справки
             total_sleep_ms = (
                 (stage.get("total_light_sleep_time_milli") or 0)
                 + (stage.get("total_slow_wave_sleep_time_milli") or 0)
@@ -122,31 +118,60 @@ async def _sync_sleep(user_id: uuid.UUID, records: list[dict]) -> int:
             )
 
             # Дата сна = дата пробуждения (а не засыпания)
-            from zoneinfo import ZoneInfo
-            msk = ZoneInfo("Europe/Moscow")
             if end_dt:
-                sleep_date = end_dt.astimezone(msk).date()
+                sleep_date = end_dt.astimezone(_tz).date()
             elif start_dt:
-                sleep_date = start_dt.astimezone(msk).date()
+                sleep_date = start_dt.astimezone(_tz).date()
             else:
                 sleep_date = today_msk()
 
-            log = SleepLog(
-                user_id=user_id,
-                date=sleep_date,
-                bed_time=start_dt,
-                wake_time=end_dt,
-                duration_minutes=_ms_to_minutes(total_sleep_ms) if total_sleep_ms else None,
-                deep_sleep_minutes=_ms_to_minutes(stage.get("total_slow_wave_sleep_time_milli")),
-                rem_sleep_minutes=_ms_to_minutes(stage.get("total_rem_sleep_time_milli")),
-                light_sleep_minutes=_ms_to_minutes(stage.get("total_light_sleep_time_milli")),
-                awake_minutes=_ms_to_minutes(stage.get("total_awake_time_milli")),
-                sleep_score=score.get("sleep_performance_percentage"),
-                source="whoop_api",
-                external_id=external_id,
-                last_synced_at=datetime.now(timezone.utc),
-            )
-            session.add(log)
+            # duration = время в кровати (из WHOOP), или bed→wake, или сумма фаз
+            if total_in_bed_ms:
+                duration = _ms_to_minutes(total_in_bed_ms)
+            elif start_dt and end_dt:
+                duration = round((end_dt - start_dt).total_seconds() / 60)
+            elif total_sleep_ms:
+                duration = _ms_to_minutes(total_sleep_ms)
+            else:
+                duration = None
+
+            # Проверяем существующую запись (включая soft-deleted)
+            existing = (await session.execute(
+                select(SleepLog).where(SleepLog.external_id == external_id)
+            )).scalar_one_or_none()
+
+            if existing:
+                if existing.deleted_at is None:
+                    continue  # уже есть активная запись
+                # Воскрешаем soft-deleted запись с обновлённой датой
+                existing.date = sleep_date
+                existing.bed_time = start_dt
+                existing.wake_time = end_dt
+                existing.duration_minutes = duration
+                existing.deep_sleep_minutes = _ms_to_minutes(stage.get("total_slow_wave_sleep_time_milli"))
+                existing.rem_sleep_minutes = _ms_to_minutes(stage.get("total_rem_sleep_time_milli"))
+                existing.light_sleep_minutes = _ms_to_minutes(stage.get("total_light_sleep_time_milli"))
+                existing.awake_minutes = _ms_to_minutes(stage.get("total_awake_time_milli"))
+                existing.sleep_score = score.get("sleep_performance_percentage")
+                existing.last_synced_at = datetime.now(timezone.utc)
+                existing.deleted_at = None
+            else:
+                log = SleepLog(
+                    user_id=user_id,
+                    date=sleep_date,
+                    bed_time=start_dt,
+                    wake_time=end_dt,
+                    duration_minutes=duration,
+                    deep_sleep_minutes=_ms_to_minutes(stage.get("total_slow_wave_sleep_time_milli")),
+                    rem_sleep_minutes=_ms_to_minutes(stage.get("total_rem_sleep_time_milli")),
+                    light_sleep_minutes=_ms_to_minutes(stage.get("total_light_sleep_time_milli")),
+                    awake_minutes=_ms_to_minutes(stage.get("total_awake_time_milli")),
+                    sleep_score=score.get("sleep_performance_percentage"),
+                    source="whoop_api",
+                    external_id=external_id,
+                    last_synced_at=datetime.now(timezone.utc),
+                )
+                session.add(log)
             synced += 1
 
         await session.commit()
@@ -168,32 +193,40 @@ async def _sync_recovery(user_id: uuid.UUID, records: list[dict]) -> int:
             # Recovery uses cycle_id as identifier
             external_id = f"whoop_recovery_{rec['cycle_id']}"
 
-            existing = await session.execute(
-                select(RecoveryLog).where(
-                    RecoveryLog.external_id == external_id,
-                    RecoveryLog.deleted_at.is_(None),
-                )
-            )
-            if existing.scalar_one_or_none():
-                continue
-
             created = _parse_iso(rec.get("created_at"))
-            from zoneinfo import ZoneInfo
-            msk = ZoneInfo("Europe/Moscow")
+            rec_date = created.astimezone(_tz).date() if created else today_msk()
 
-            log = RecoveryLog(
-                user_id=user_id,
-                date=created.astimezone(msk).date() if created else today_msk(),
-                recovery_score=score.get("recovery_score"),
-                hrv_ms=score.get("hrv_rmssd_milli"),
-                resting_hr=score.get("resting_heart_rate"),
-                spo2=score.get("spo2_percentage"),
-                skin_temp_celsius=score.get("skin_temp_celsius"),
-                source="whoop_api",
-                external_id=external_id,
-                last_synced_at=datetime.now(timezone.utc),
-            )
-            session.add(log)
+            # Проверяем существующую запись (включая soft-deleted)
+            existing = (await session.execute(
+                select(RecoveryLog).where(RecoveryLog.external_id == external_id)
+            )).scalar_one_or_none()
+
+            if existing:
+                if existing.deleted_at is None:
+                    continue  # уже есть активная запись
+                # Воскрешаем soft-deleted запись с обновлёнными данными
+                existing.date = rec_date
+                existing.recovery_score = score.get("recovery_score")
+                existing.hrv_ms = score.get("hrv_rmssd_milli")
+                existing.resting_hr = score.get("resting_heart_rate")
+                existing.spo2 = score.get("spo2_percentage")
+                existing.skin_temp_celsius = score.get("skin_temp_celsius")
+                existing.last_synced_at = datetime.now(timezone.utc)
+                existing.deleted_at = None
+            else:
+                log = RecoveryLog(
+                    user_id=user_id,
+                    date=rec_date,
+                    recovery_score=score.get("recovery_score"),
+                    hrv_ms=score.get("hrv_rmssd_milli"),
+                    resting_hr=score.get("resting_heart_rate"),
+                    spo2=score.get("spo2_percentage"),
+                    skin_temp_celsius=score.get("skin_temp_celsius"),
+                    source="whoop_api",
+                    external_id=external_id,
+                    last_synced_at=datetime.now(timezone.utc),
+                )
+                session.add(log)
             synced += 1
 
         await session.commit()
@@ -210,15 +243,6 @@ async def _sync_workouts(user_id: uuid.UUID, records: list[dict]) -> int:
 
             # v2 uses UUID string IDs
             external_id = f"whoop_workout_{rec['id']}"
-
-            existing = await session.execute(
-                select(WorkoutLog).where(
-                    WorkoutLog.external_id == external_id,
-                    WorkoutLog.deleted_at.is_(None),
-                )
-            )
-            if existing.scalar_one_or_none():
-                continue
 
             score = rec.get("score", {})
             start_dt = _parse_iso(rec.get("start"))
@@ -238,26 +262,47 @@ async def _sync_workouts(user_id: uuid.UUID, records: list[dict]) -> int:
                 else:
                     intensity = "low"
 
-            from zoneinfo import ZoneInfo
-            msk = ZoneInfo("Europe/Moscow")
+            workout_date = start_dt.astimezone(_tz).date() if start_dt else today_msk()
 
-            log = WorkoutLog(
-                user_id=user_id,
-                date=start_dt.astimezone(msk).date() if start_dt else today_msk(),
-                started_at=start_dt,
-                ended_at=end_dt,
-                duration_minutes=duration,
-                workout_type=rec.get("sport_name", "unknown"),
-                intensity=intensity,
-                avg_hr=score.get("average_heart_rate"),
-                max_hr=score.get("max_heart_rate"),
-                calories_burned=round(score["kilojoule"] / 4.184) if score.get("kilojoule") else None,
-                strain=strain,
-                source="whoop_api",
-                external_id=external_id,
-                last_synced_at=datetime.now(timezone.utc),
-            )
-            session.add(log)
+            # Проверяем существующую запись (включая soft-deleted)
+            existing = (await session.execute(
+                select(WorkoutLog).where(WorkoutLog.external_id == external_id)
+            )).scalar_one_or_none()
+
+            if existing:
+                if existing.deleted_at is None:
+                    continue  # уже есть активная запись
+                # Воскрешаем soft-deleted запись с обновлёнными данными
+                existing.date = workout_date
+                existing.started_at = start_dt
+                existing.ended_at = end_dt
+                existing.duration_minutes = duration
+                existing.workout_type = rec.get("sport_name", "unknown")
+                existing.intensity = intensity
+                existing.avg_hr = score.get("average_heart_rate")
+                existing.max_hr = score.get("max_heart_rate")
+                existing.calories_burned = round(score["kilojoule"] / 4.184) if score.get("kilojoule") else None
+                existing.strain = strain
+                existing.last_synced_at = datetime.now(timezone.utc)
+                existing.deleted_at = None
+            else:
+                log = WorkoutLog(
+                    user_id=user_id,
+                    date=workout_date,
+                    started_at=start_dt,
+                    ended_at=end_dt,
+                    duration_minutes=duration,
+                    workout_type=rec.get("sport_name", "unknown"),
+                    intensity=intensity,
+                    avg_hr=score.get("average_heart_rate"),
+                    max_hr=score.get("max_heart_rate"),
+                    calories_burned=round(score["kilojoule"] / 4.184) if score.get("kilojoule") else None,
+                    strain=strain,
+                    source="whoop_api",
+                    external_id=external_id,
+                    last_synced_at=datetime.now(timezone.utc),
+                )
+                session.add(log)
             synced += 1
 
         await session.commit()

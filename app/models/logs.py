@@ -84,7 +84,7 @@ class MealLog(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     date: Mapped[date] = mapped_column(Date)
-    time: Mapped[time | None] = mapped_column(Time)
+    time: Mapped[time | None] = mapped_column(Time, nullable=True)
     meal_type: Mapped[str | None] = mapped_column(String(20))
     description: Mapped[str | None] = mapped_column(Text)
     calories: Mapped[int | None] = mapped_column(Integer)

@@ -46,12 +46,13 @@ _bot_app = None
 async def lifespan(app: FastAPI):
     global _bot_app
 
-    logger.info("Starting Health Agent (env=%s)...", settings.app_env)
+    use_webhook = bool(settings.telegram_webhook_url)
+    logger.info("Starting Health Agent (env=%s, telegram=%s)...", settings.app_env, "webhook" if use_webhook else "polling")
 
-    if settings.app_env == "dev":
-        _bot_app = await start_polling()
-    else:
+    if use_webhook:
         _bot_app = await start_webhook()
+    else:
+        _bot_app = await start_polling()
 
     # --- Scheduler ---
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -107,10 +108,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     scheduler.shutdown(wait=False)
     if _bot_app:
-        if settings.app_env == "dev":
-            await stop_polling(_bot_app)
-        else:
+        if use_webhook:
             await stop_webhook(_bot_app)
+        else:
+            await stop_polling(_bot_app)
     logger.info("Health Agent stopped.")
 
 

@@ -8,6 +8,12 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 .DS_Store
 *.db
 *.sqlite3
+*.log
+.idea/
+.vscode/
+.claude/

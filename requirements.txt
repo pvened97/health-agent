@@ -20,3 +20,4 @@ python-dotenv==1.*
 
 # Scheduler
 apscheduler==3.*
+

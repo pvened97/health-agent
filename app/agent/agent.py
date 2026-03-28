@@ -36,6 +36,7 @@ from app.agent.tools.summary import get_daily_recommendation_context, get_week_s
 from app.agent.tools.catalog import search_meal_catalog
 from app.agent.tools.whoop import get_whoop_status, sync_whoop_now, get_latest_whoop_metrics
 from app.agent.tools.body import save_body_metric, get_weight_history
+from app.agent.tools.calorie_calc import calculate_daily_target
 from app.agent.context import build_user_context
 from app.agent.router import choose_model
 
@@ -126,6 +127,12 @@ BASE_SYSTEM_PROMPT = """Ты — персональный ассистент: н
 - Если каталог пуст или блюдо не найдено — оцени сам как обычно и предупреди что это приблизительно.
 - get_recent_logs показывает что УЖЕ записано. search_meal_catalog показывает что ЗАПЛАНИРОВАНО из доставки. Не путай.
 
+Дневная норма калорий:
+- Для расчёта дневной нормы вызови calculate_daily_target. Он считает всё автоматически из профиля, WHOOP strain и recovery.
+- Когда пользователь спрашивает «сколько мне есть», «какая моя норма», «сколько калорий» — вызови calculate_daily_target.
+- Если пользователь спрашивает «почему столько?» — покажи breakdown из ответа calculate_daily_target.
+- Профицит применяется ТОЛЬКО при цели «набор массы». При других целях — без профицита.
+
 Вес:
 - Когда пользователь сообщает вес («вешу 76», «утренний вес 75.5», «взвесился — 74.8») — записывай через save_body_metric.
 - Если вес изменился на ±2 кг от текущего в профиле — обнови профиль через update_user_profile(category="anthropometry", key="weight_kg", value="76").
@@ -170,6 +177,7 @@ MAIN_TOOLS = [
     get_latest_whoop_metrics,
     save_body_metric,
     get_weight_history,
+    calculate_daily_target,
 ]
 
 # Агент-шаблон (instructions и tools подменяются динамически в run_agent)

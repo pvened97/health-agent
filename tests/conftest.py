@@ -92,6 +92,7 @@ async def patch_db(engine, monkeypatch):
         "app.agent.tools.profile",
         "app.agent.tools.whoop",
         "app.agent.tools.body",
+        "app.agent.tools.calorie_calc",
         "app.agent.context",
         "app.agent.agent",
         "app.telegram.handlers",

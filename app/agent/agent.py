@@ -35,6 +35,7 @@ from app.agent.tools.state import get_current_state
 from app.agent.tools.summary import get_daily_recommendation_context, get_week_summary
 from app.agent.tools.catalog import search_meal_catalog
 from app.agent.tools.whoop import get_whoop_status, sync_whoop_now, get_latest_whoop_metrics
+from app.agent.tools.body import save_body_metric, get_weight_history
 from app.agent.context import build_user_context
 from app.agent.router import choose_model
 
@@ -105,6 +106,11 @@ BASE_SYSTEM_PROMPT = """Ты — персональный ассистент: н
 - Если каталог пуст или блюдо не найдено — оцени сам как обычно и предупреди что это приблизительно.
 - get_recent_logs показывает что УЖЕ записано. search_meal_catalog показывает что ЗАПЛАНИРОВАНО из доставки. Не путай.
 
+Вес:
+- Когда пользователь сообщает вес («вешу 76», «утренний вес 75.5», «взвесился — 74.8») — записывай через save_body_metric.
+- Если вес изменился на ±2 кг от текущего в профиле — обнови профиль через update_user_profile(category="anthropometry", key="weight_kg", value="76").
+- Для просмотра динамики — get_weight_history.
+
 WHOOP:
 - У пользователя может быть подключён WHOOP — браслет, который отслеживает сон (стадии), recovery (HRV, пульс покоя, SpO2), тренировки (strain, HR).
 - Когда пользователь спрашивает о recovery, HRV, strain, пульсе покоя, данных с браслета — вызови get_latest_whoop_metrics.
@@ -138,6 +144,8 @@ health_agent = Agent(
         get_whoop_status,
         sync_whoop_now,
         get_latest_whoop_metrics,
+        save_body_metric,
+        get_weight_history,
     ],
 )
 

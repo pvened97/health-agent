@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.config import settings, today_msk
 from app.database import async_session
-from app.models.logs import SleepLog, RecoveryLog, WorkoutLog
+from app.models.logs import SleepLog, RecoveryLog, WorkoutLog, BodyMetric
 from app.models.whoop import SyncEvent
 from app.whoop.client import get_whoop_client
 
@@ -65,6 +65,16 @@ async def sync_whoop_data(user_id: uuid.UUID, days: int = 7) -> str:
     except Exception as e:
         logger.exception("WHOOP workout sync error")
         results.append(f"Тренировки: ошибка ({e})")
+
+    # --- Вес (антропометрия) ---
+    try:
+        body = await client.get_body_measurement()
+        weight_synced = await _sync_body_measurement(user_id, body)
+        if weight_synced:
+            results.append("Вес: обновлён из WHOOP")
+    except Exception as e:
+        logger.exception("WHOOP body measurement sync error")
+        results.append(f"Вес: ошибка ({e})")
 
     # Записываем sync event
     async with async_session() as session:
@@ -307,3 +317,53 @@ async def _sync_workouts(user_id: uuid.UUID, records: list[dict]) -> int:
 
         await session.commit()
     return synced
+
+
+async def _sync_body_measurement(user_id: uuid.UUID, body: dict) -> bool:
+    """Сохраняет вес из WHOOP body measurement. Записывает не чаще раза в день."""
+    weight_kg = body.get("weight_kilogram")
+    if not weight_kg:
+        return False
+
+    today = today_msk()
+
+    async with async_session() as session:
+        # Проверяем, есть ли уже запись за сегодня из WHOOP
+        existing = (await session.execute(
+            select(BodyMetric).where(
+                BodyMetric.user_id == user_id,
+                BodyMetric.date == today,
+                BodyMetric.source == "whoop_api",
+                BodyMetric.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            if existing.weight_kg == round(weight_kg, 1):
+                return False  # вес не изменился
+            existing.weight_kg = round(weight_kg, 1)
+        else:
+            # Не перезаписываем ручную запись за сегодня
+            manual_today = (await session.execute(
+                select(BodyMetric).where(
+                    BodyMetric.user_id == user_id,
+                    BodyMetric.date == today,
+                    BodyMetric.deleted_at.is_(None),
+                )
+            )).scalar_one_or_none()
+
+            if manual_today:
+                return False  # ручная запись приоритетнее
+
+            metric = BodyMetric(
+                user_id=user_id,
+                date=today,
+                weight_kg=round(weight_kg, 1),
+                source="whoop_api",
+            )
+            session.add(metric)
+
+        await session.commit()
+        logger.info("Body weight synced from WHOOP: %.1f kg", weight_kg)
+
+    return True

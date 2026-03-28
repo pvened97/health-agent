@@ -19,7 +19,16 @@ REQUIRED_PROFILE_FIELDS = [
     ("anthropometry", "weight_kg", "Вес (кг)"),
     ("anthropometry", "height_cm", "Рост (см)"),
     ("goals", "primary_goal", "Основная цель (набор массы / похудение / поддержание формы / рекомпозиция)"),
+    ("lifestyle", "activity_level", "Уровень бытовой активности (low / moderate / high / very_high)"),
 ]
+
+# Маппинг уровня активности → коэффициент для BMR
+ACTIVITY_LEVEL_MULTIPLIER = {
+    "low": 1.35,
+    "moderate": 1.45,
+    "high": 1.55,
+    "very_high": 1.60,
+}
 
 
 async def get_missing_profile_fields(user_id: uuid.UUID) -> list[str]:

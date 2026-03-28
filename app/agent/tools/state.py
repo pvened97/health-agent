@@ -53,13 +53,14 @@ async def get_current_state(days: int = 7) -> str:
             func.sum(MealLog.protein_g),
             func.sum(MealLog.carbs_g),
             func.sum(MealLog.fat_g),
+            func.sum(MealLog.fiber_g),
         ).where(
             MealLog.user_id == user_id,
             MealLog.date >= since,
             MealLog.deleted_at.is_(None),
         )
         meal_row = (await session.execute(meal_stmt)).one()
-        meal_count, total_cal, total_prot, total_carbs, total_fat = meal_row
+        meal_count, total_cal, total_prot, total_carbs, total_fat, total_fiber = meal_row
 
         if meal_count:
             # Количество уникальных дней с записями
@@ -72,12 +73,21 @@ async def get_current_state(days: int = 7) -> str:
 
             avg_cal = int(total_cal / meal_days) if total_cal else None
             avg_prot = round(total_prot / meal_days, 1) if total_prot else None
+            avg_fat = round(total_fat / meal_days, 1) if total_fat else None
+            avg_carbs = round(total_carbs / meal_days, 1) if total_carbs else None
+            avg_fiber = round(total_fiber / meal_days, 1) if total_fiber else None
 
-            parts.append(f"\nПитание ({meal_count} записей за {meal_days} дн.):")
+            parts.append(f"\nПитание (за {meal_days} дн.):")
             if avg_cal:
                 parts.append(f"  Среднее: ~{avg_cal} ккал/день")
             if avg_prot:
                 parts.append(f"  Белок: ~{avg_prot} г/день")
+            if avg_fat:
+                parts.append(f"  Жиры: ~{avg_fat} г/день")
+            if avg_carbs:
+                parts.append(f"  Углеводы: ~{avg_carbs} г/день")
+            if avg_fiber:
+                parts.append(f"  Клетчатка: ~{avg_fiber} г/день")
         else:
             parts.append("\nПитание: нет записей.")
 

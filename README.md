@@ -53,7 +53,7 @@ cp .env.example .env
 |---|---|
 | `OPENAI_API_KEY` | Ключ [OpenAI API](https://platform.openai.com/api-keys) |
 | `TELEGRAM_BOT_TOKEN` | Токен бота от [@BotFather](https://t.me/BotFather) |
-| `ALLOWED_TELEGRAM_USER_ID` | Твой числовой Telegram ID (узнать: [@userinfobot](https://t.me/userinfobot)) |
+| `ALLOWED_TELEGRAM_USER_IDS` | Telegram ID через запятую (узнать свой: [@userinfobot](https://t.me/userinfobot)) |
 
 Опциональные:
 

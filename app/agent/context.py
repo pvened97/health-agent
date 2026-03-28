@@ -12,6 +12,32 @@ from app.models.memory import UserProfile, DerivedRule
 from app.models.logs import SleepLog, MealLog, WorkoutLog, DailyNote, RecoveryLog
 from app.quality.rules import check_all_rules
 
+# Поля, которые должны быть заполнены для завершения онбординга
+REQUIRED_PROFILE_FIELDS = [
+    ("goals", "primary_goal", "Основная цель (набор массы / похудение / поддержание формы / рекомпозиция)"),
+    ("anthropometry", "age", "Возраст"),
+    ("anthropometry", "weight_kg", "Вес (кг)"),
+    ("anthropometry", "height_cm", "Рост (см)"),
+    ("goals", "daily_calories", "Цель по калориям в день"),
+    ("goals", "daily_protein_g", "Цель по белку в день (г)"),
+]
+
+
+async def get_missing_profile_fields(user_id: uuid.UUID) -> list[str]:
+    """Возвращает список описаний незаполненных обязательных полей профиля."""
+    async with async_session() as session:
+        stmt = select(UserProfile.category, UserProfile.key).where(
+            UserProfile.user_id == user_id,
+            UserProfile.deleted_at.is_(None),
+        )
+        rows = (await session.execute(stmt)).all()
+        existing = {(r[0], r[1]) for r in rows}
+
+    return [
+        desc for cat, key, desc in REQUIRED_PROFILE_FIELDS
+        if (cat, key) not in existing
+    ]
+
 
 async def build_user_context(user_id: uuid.UUID) -> str:
     """Собирает краткий контекст о пользователе для инъекции в system prompt.
@@ -57,6 +83,28 @@ async def build_user_context(user_id: uuid.UUID) -> str:
                 profile_lines.append(f"  {row.key}: {row.value}")
             sections.append("Профиль пользователя:\n" + "\n".join(profile_lines))
 
+        # --- Онбординг: если есть незаполненные обязательные поля ---
+        existing_keys = {(r.category, r.key) for r in profile_rows}
+        missing = [
+            desc for cat, key, desc in REQUIRED_PROFILE_FIELDS
+            if (cat, key) not in existing_keys
+        ]
+        if missing:
+            missing_list = "\n".join(f"  - {m}" for m in missing)
+            sections.insert(0, (
+                "РЕЖИМ ОНБОРДИНГА:\n"
+                "Профиль пользователя заполнен не полностью. Твоя главная задача — "
+                "извлечь недостающие данные из сообщений и сохранить через update_user_profile.\n\n"
+                f"Ещё не заполнено:\n{missing_list}\n\n"
+                "Правила онбординга:\n"
+                "- Извлекай данные из свободного текста. Если пользователь написал «мне 28, вешу 75, рост 180» — сохрани все три сразу.\n"
+                "- Для primary_goal используй одно из: набор массы, похудение, поддержание формы, рекомпозиция.\n"
+                "- Если после обработки сообщения остались незаполненные поля — спроси о них. Будь дружелюбным, не допрашивай.\n"
+                "- Сохраняй каждый факт СРАЗУ через update_user_profile, не жди пока соберёшь всё.\n"
+                "- Когда ВСЕ обязательные поля заполнены — вызови get_user_profile и отправь пользователю итоговую сводку профиля. "
+                "Подтверди, что настройка завершена и ты готов работать."
+            ))
+
         # --- Последний сон ---
         yesterday = today_msk() - timedelta(days=1)
         sleep_stmt = (
@@ -94,7 +142,7 @@ async def build_user_context(user_id: uuid.UUID) -> str:
         meal_count, total_cal, total_prot = meal_row
 
         if meal_count:
-            meal_info = f"Питание сегодня: {meal_count} приёмов"
+            meal_info = "Питание сегодня:"
             if total_cal:
                 meal_info += f", ~{int(total_cal)} ккал"
             if total_prot:

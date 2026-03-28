@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://healthagent:healthagent@localhost:5432/healthagent"
 
-    # Access
-    allowed_telegram_user_id: int
+    # Access (comma-separated Telegram user IDs)
+    allowed_telegram_user_ids: str
 
     # WHOOP
     whoop_client_id: str = ""
@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    @property
+    def allowed_user_ids_set(self) -> set[int]:
+        """Парсит ALLOWED_TELEGRAM_USER_IDS в set[int]."""
+        return {
+            int(uid.strip())
+            for uid in self.allowed_telegram_user_ids.split(",")
+            if uid.strip().isdigit()
+        }
 
 
 settings = Settings()

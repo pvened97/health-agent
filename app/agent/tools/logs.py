@@ -65,6 +65,7 @@ async def save_meal_log(
     protein_g: Optional[float] = None,
     carbs_g: Optional[float] = None,
     fat_g: Optional[float] = None,
+    fiber_g: Optional[float] = None,
     comment: Optional[str] = None,
 ) -> str:
     """Сохраняет запись о приёме пищи.
@@ -74,10 +75,11 @@ async def save_meal_log(
         description: Что съел пользователь
         meal_type: Тип приёма пищи: breakfast, lunch, dinner, snack
         meal_time: Время приёма пищи в формате HH:MM
-        calories: Примерная калорийность
+        calories: Калорийность (ккал)
         protein_g: Белок в граммах
         carbs_g: Углеводы в граммах
         fat_g: Жиры в граммах
+        fiber_g: Клетчатка в граммах
         comment: Комментарий
     """
     user_id = get_user_id()
@@ -102,6 +104,7 @@ async def save_meal_log(
         protein_g=protein_g,
         carbs_g=carbs_g,
         fat_g=fat_g,
+        fiber_g=fiber_g,
         comment=comment,
     )
 
@@ -112,8 +115,17 @@ async def save_meal_log(
     parts = [f"Приём пищи записан: {description}."]
     if calories:
         parts.append(f"~{calories} ккал.")
+    macros = []
     if protein_g:
-        parts.append(f"Белок: {protein_g}г.")
+        macros.append(f"Б {protein_g}г")
+    if fat_g:
+        macros.append(f"Ж {fat_g}г")
+    if carbs_g:
+        macros.append(f"У {carbs_g}г")
+    if fiber_g:
+        macros.append(f"Клетчатка {fiber_g}г")
+    if macros:
+        parts.append(" / ".join(macros))
     return " ".join(parts)
 
 
@@ -256,8 +268,17 @@ async def get_recent_logs(
             lines.append(f"  [{rid}] {row.date}: сон{dur}{qual}")
         elif log_type == "meal":
             cal = f", ~{row.calories} ккал" if row.calories else ""
-            prot = f", белок {row.protein_g}г" if row.protein_g else ""
-            lines.append(f"  [{rid}] {row.date} {row.meal_type or ''}: {row.description}{cal}{prot}")
+            macros = []
+            if row.protein_g:
+                macros.append(f"Б {row.protein_g}г")
+            if row.fat_g:
+                macros.append(f"Ж {row.fat_g}г")
+            if row.carbs_g:
+                macros.append(f"У {row.carbs_g}г")
+            if row.fiber_g:
+                macros.append(f"Клетч. {row.fiber_g}г")
+            macro_str = f" ({' / '.join(macros)})" if macros else ""
+            lines.append(f"  [{rid}] {row.date} {row.meal_type or ''}: {row.description}{cal}{macro_str}")
         elif log_type == "workout":
             dur = f", {row.duration_minutes} мин" if row.duration_minutes else ""
             inten = f", {row.intensity}" if row.intensity else ""

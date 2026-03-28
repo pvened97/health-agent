@@ -125,13 +125,13 @@ async def _sync_sleep(user_id: uuid.UUID, records: list[dict]) -> int:
             else:
                 sleep_date = today_msk()
 
-            # duration = время в кровати (из WHOOP), или bed→wake, или сумма фаз
-            if total_in_bed_ms:
-                duration = _ms_to_minutes(total_in_bed_ms)
+            # duration = чистый сон (light + deep + REM), без awake
+            if total_sleep_ms:
+                duration = _ms_to_minutes(total_sleep_ms)
+            elif total_in_bed_ms:
+                duration = _ms_to_minutes(total_in_bed_ms)  # fallback
             elif start_dt and end_dt:
                 duration = round((end_dt - start_dt).total_seconds() / 60)
-            elif total_sleep_ms:
-                duration = _ms_to_minutes(total_sleep_ms)
             else:
                 duration = None
 

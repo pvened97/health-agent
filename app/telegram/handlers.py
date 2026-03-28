@@ -44,7 +44,7 @@ async def _send_typing_while(chat_id: int, bot, task: asyncio.Task) -> None:
 async def _ensure_allowed_user(update: Update):
     """Проверяет доступ и возвращает user или None."""
     telegram_user = update.effective_user
-    if telegram_user.id != settings.allowed_telegram_user_id:
+    if telegram_user.id not in settings.allowed_user_ids_set:
         return None
 
     return await get_or_create_user(
@@ -132,35 +132,156 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /start — онбординг."""
-    if update.effective_user.id != settings.allowed_telegram_user_id:
+    """Обработчик команды /start — онбординг или приветствие."""
+    user = await _ensure_allowed_user(update)
+    if not user:
+        return
+
+    from app.agent.context import get_missing_profile_fields
+    from app.agent.agent import _conversation_history
+
+    missing = await get_missing_profile_fields(user.id)
+
+    if not missing:
+        # Профиль уже заполнен — короткое приветствие
+        await update.message.reply_text(
+            "С возвращением! Просто напиши — я на связи.\n\n"
+            "Команды:\n"
+            "/help — что я умею\n"
+            "/whoop — подключить или синхронизировать WHOOP\n"
+            "/costs — расходы на API"
+        )
+        return
+
+    # Новый пользователь — системная плашка + запуск онбординга через агента
+    await update.message.reply_text(
+        "Привет! Я — персональный ассистент по здоровью.\n\n"
+        "Что я умею:\n"
+        "- Записывать питание, сон и тренировки (текстом или фото еды)\n"
+        "- Давать рекомендации по питанию, нагрузке и восстановлению\n"
+        "- Показывать аналитику: дневные итоги, недельные обзоры, тренды\n"
+        "- Синхронизировать данные с WHOOP\n\n"
+        "Каждый вечер пришлю итог дня с прогрессом по твоим целям."
+    )
+
+    # Очищаем историю для чистого онбординга
+    history_key = str(user.id)
+    _conversation_history.pop(history_key, None)
+
+    # Запускаем агента с онбординг-запросом
+    onboarding_prompt = (
+        "Пользователь только что запустил бота. Расскажи ему в свободной форме, "
+        "какие данные тебе нужны для персонализации, и попроси написать о себе. "
+        "Предложи типичные цели: набор массы, похудение, поддержание формы, рекомпозиция. "
+        "Попроси указать возраст, рост, вес и цели по калориям/белку. "
+        "Будь дружелюбным и кратким."
+    )
+
+    agent_task = asyncio.create_task(run_agent(onboarding_prompt, user_id=user.id, trigger="onboarding"))
+    typing_task = asyncio.create_task(
+        _send_typing_while(update.effective_chat.id, context.bot, agent_task)
+    )
+
+    try:
+        response = await agent_task
+    except Exception as e:
+        logger.exception("Onboarding agent error for user %s", update.effective_user.id)
+        response = "Расскажи о себе в свободной форме: цель, возраст, рост, вес, цели по калориям и белку."
+    finally:
+        typing_task.cancel()
+
+    try:
+        await update.message.reply_text(_md_to_html(response), parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text(response)
+
+
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /help."""
+    user = await _ensure_allowed_user(update)
+    if not user:
         return
 
     await update.message.reply_text(
-        "Привет! Я твой персональный ассистент по здоровью.\n\n"
-        "Что я умею:\n"
-        "- Записывать питание, сон и тренировки (просто напиши или отправь фото еды)\n"
-        "- Давать рекомендации по тренировкам, питанию и восстановлению на основе твоих данных\n"
-        "- Показывать аналитику: дневную оценку, недельные обзоры, тренды\n"
-        "- Синхронизировать данные с WHOOP (recovery, HRV, сон, strain)\n\n"
-        "Чтобы я давал точные рекомендации, расскажи о себе:\n"
-        "- Цель (набор массы, похудение, поддержание формы)\n"
-        "- Возраст, вес, рост\n"
-        "- Цель по калориям и белку в день (например: 2500 ккал, 160г белка)\n"
-        "- Ограничения в питании (аллергии, непереносимости)\n"
-        "- Опыт тренировок\n\n"
-        "Просто напиши это в свободной форме — я запомню.\n"
-        "Каждый вечер пришлю итог дня с прогрессом по твоим целям.\n\n"
+        "Что я понимаю:\n\n"
+        "Еда — «съел омлет с сыром», «обед: паста 400г», или отправь фото еды\n"
+        "Сон — «лёг в 23:30, встал в 7:00», «спал 7 часов»\n"
+        "Тренировка — «силовая 60 мин», «побегал 5 км»\n"
+        "Заметка — «болит голова», «энергия 7/10»\n\n"
+        "Можно спрашивать:\n"
+        "— «что я ел сегодня?»\n"
+        "— «итог дня» / «итог недели»\n"
+        "— «что посоветуешь на ужин?»\n"
+        "— «как спланировать тренировку?»\n"
+        "— «удали последний приём пищи»\n\n"
         "Команды:\n"
-        "/whoop — подключить или синхронизировать WHOOP"
+        "/whoop — подключить или синхронизировать WHOOP\n"
+        "/costs — расходы на API\n"
+        "/help — эта справка"
     )
+
+
+async def handle_costs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /costs — статистика расходов на API."""
+    user = await _ensure_allowed_user(update)
+    if not user:
+        return
+
+    from sqlalchemy import select, func, case
+    from app.database import async_session
+    from app.models.agent import AgentRun
+
+    # Цены за 1M токенов (USD) — обновлять при смене модели
+    PRICES = {
+        "gpt-5.4":      {"input": 2.00, "output": 8.00},
+        "gpt-5.4-mini": {"input": 0.30, "output": 1.20},
+    }
+    DEFAULT_PRICE = {"input": 2.00, "output": 8.00}
+
+    async with async_session() as session:
+        stmt = (
+            select(
+                AgentRun.model,
+                func.sum(AgentRun.tokens_input).label("input"),
+                func.sum(AgentRun.tokens_output).label("output"),
+                func.count(AgentRun.id).label("runs"),
+            )
+            .where(AgentRun.user_id == user.id)
+            .group_by(AgentRun.model)
+        )
+        rows = (await session.execute(stmt)).all()
+
+    if not rows or all(r.input is None for r in rows):
+        await update.message.reply_text("Пока нет данных о расходах.")
+        return
+
+    lines = ["Расходы на OpenAI API:\n"]
+    total_cost = 0.0
+    total_input = 0
+    total_output = 0
+
+    for row in rows:
+        if not row.input and not row.output:
+            continue
+        inp = row.input or 0
+        out = row.output or 0
+        prices = PRICES.get(row.model, DEFAULT_PRICE)
+        cost = (inp / 1_000_000) * prices["input"] + (out / 1_000_000) * prices["output"]
+        total_cost += cost
+        total_input += inp
+        total_output += out
+        lines.append(
+            f"{row.model}: {row.runs} запросов, "
+            f"{inp:,} in / {out:,} out — ${cost:.4f}"
+        )
+
+    lines.append(f"\nИтого: {total_input:,} in / {total_output:,} out — ${total_cost:.4f}")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def handle_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /whoop — подключение и синхронизация WHOOP."""
-    if update.effective_user.id != settings.allowed_telegram_user_id:
-        return
-
     user = await _ensure_allowed_user(update)
     if not user:
         return

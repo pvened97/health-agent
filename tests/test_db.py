@@ -149,7 +149,7 @@ class TestSyncResurrect:
         log = (await session.execute(
             select(SleepLog).where(SleepLog.external_id == "whoop_sleep_test-sleep-001")
         )).scalar_one()
-        assert log.duration_minutes == 480  # 8h from total_in_bed_time
+        assert log.duration_minutes == 450  # 7.5h actual sleep (light+deep+REM)
         assert log.deleted_at is None
 
     @pytest.mark.asyncio
@@ -218,11 +218,11 @@ class TestSyncResurrect:
         )).scalar_one()
         assert resurrected.id == original_id
         assert resurrected.deleted_at is None
-        assert resurrected.duration_minutes == 480
+        assert resurrected.duration_minutes == 450
 
     @pytest.mark.asyncio
-    async def test_sleep_duration_uses_in_bed_time(self, user_id, session):
-        """duration_minutes should be total_in_bed_time, not sum of sleep stages."""
+    async def test_sleep_duration_uses_actual_sleep(self, user_id, session):
+        """duration_minutes should be actual sleep (light+deep+REM), not time in bed."""
         from app.whoop.sync import _sync_sleep
         records = [{
             "id": "test-sleep-duration",
@@ -232,7 +232,7 @@ class TestSyncResurrect:
             "end": "2026-03-25T07:00:00.000Z",
             "score": {
                 "stage_summary": {
-                    "total_in_bed_time_milli": 28_800_000,  # 480 min
+                    "total_in_bed_time_milli": 28_800_000,  # 480 min in bed
                     "total_light_sleep_time_milli": 10_800_000,  # 180 min
                     "total_slow_wave_sleep_time_milli": 5_400_000,  # 90 min
                     "total_rem_sleep_time_milli": 3_600_000,  # 60 min
@@ -247,8 +247,8 @@ class TestSyncResurrect:
         log = (await session.execute(
             select(SleepLog).where(SleepLog.external_id == "whoop_sleep_test-sleep-duration")
         )).scalar_one()
-        # Should be 480 (in-bed), NOT 330 (light+deep+rem)
-        assert log.duration_minutes == 480
+        # Should be 330 (light+deep+rem), NOT 480 (in-bed)
+        assert log.duration_minutes == 330
 
     @pytest.mark.asyncio
     async def test_sleep_date_uses_wake_time_msk(self, user_id, session):

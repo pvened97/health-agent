@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters
 
 from app.config import settings
-from app.telegram.handlers import handle_message, handle_photo, handle_start, handle_whoop
+from app.telegram.handlers import handle_message, handle_photo, handle_start, handle_whoop, handle_costs, handle_help
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,9 @@ def create_bot_app():
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
 
     app.add_handler(CommandHandler("start", handle_start))
+    app.add_handler(CommandHandler("help", handle_help))
     app.add_handler(CommandHandler("whoop", handle_whoop))
+    app.add_handler(CommandHandler("costs", handle_costs))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 

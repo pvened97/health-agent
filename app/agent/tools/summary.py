@@ -142,16 +142,17 @@ async def get_daily_recommendation_context(target_date: str = "") -> str:
             func.sum(MealLog.protein_g),
             func.sum(MealLog.carbs_g),
             func.sum(MealLog.fat_g),
+            func.sum(MealLog.fiber_g),
         ).where(
             MealLog.user_id == user_id,
             MealLog.date == target,
             MealLog.deleted_at.is_(None),
         )
         meal_row = (await session.execute(meals_stmt)).one()
-        m_count, m_cal, m_prot, m_carbs, m_fat = meal_row
+        m_count, m_cal, m_prot, m_carbs, m_fat, m_fiber = meal_row
 
         if m_count:
-            meal_parts = [f"Питание {target_label} ({m_count} приёмов):"]
+            meal_parts = [f"Питание {target_label}:"]
             if m_cal:
                 cal_str = f"  Калории: {int(m_cal)} ккал"
                 if cal_min and cal_max:
@@ -162,10 +163,12 @@ async def get_daily_recommendation_context(target_date: str = "") -> str:
                 if prot_min and prot_max:
                     prot_str += f" ({_goal_progress(m_prot, prot_min, prot_max)})"
                 meal_parts.append(prot_str)
-            if m_carbs:
-                meal_parts.append(f"  Углеводы: {m_carbs:.0f}г")
             if m_fat:
                 meal_parts.append(f"  Жиры: {m_fat:.0f}г")
+            if m_carbs:
+                meal_parts.append(f"  Углеводы: {m_carbs:.0f}г")
+            if m_fiber:
+                meal_parts.append(f"  Клетчатка: {m_fiber:.0f}г")
             sections.append("\n".join(meal_parts))
         else:
             sections.append(f"Питание {target_label}: нет данных.")
@@ -334,7 +337,7 @@ async def get_week_summary(weeks_ago: int = 0) -> str:
                 sign = "+" if diff > 0 else ""
                 cal_delta = f" (дельта: {sign}{diff} ккал)"
 
-            meal_lines = [f"\nПитание ({m_count} записей за {m_days} дн.):"]
+            meal_lines = [f"\nПитание (за {m_days} дн.):"]
             if avg_cal:
                 meal_lines.append(f"  Среднее: ~{avg_cal} ккал/день{cal_delta}")
             if avg_prot:

@@ -54,6 +54,32 @@ def get_today_date() -> str:
     return today_msk().isoformat()
 
 
+ONBOARDING_PROMPT = """Ты — персональный ассистент по здоровью. Сейчас ты в режиме настройки профиля.
+
+Твоя единственная задача — собрать обязательные данные о пользователе и сохранить их через update_user_profile.
+
+Обязательные поля:
+- Пол (category="anthropometry", key="sex") — сохраняй как «M» или «F». Определяй из контекста: «мужчина/парень/м» → M, «женщина/девушка/ж» → F.
+- Возраст (category="anthropometry", key="age")
+- Вес в кг (category="anthropometry", key="weight_kg")
+- Рост в см (category="anthropometry", key="height_cm")
+- Основная цель (category="goals", key="primary_goal") — одно из: набор массы, похудение, поддержание формы, рекомпозиция.
+- Уровень бытовой активности (category="lifestyle", key="activity_level") — одно из:
+  «low» — офис, мало шагов, сидячая работа, работа из дома
+  «moderate» — офис + прогулки, 6-8k шагов, гуляет с собакой
+  «high» — активная работа на ногах, 10k+ шагов, много ходит пешком
+  «very_high» — физический труд, курьер, стройка, постоянное движение
+  Это бытовая активность БЕЗ учёта тренировок.
+
+Правила:
+- Извлекай данные из свободного текста. «Мне 28, вешу 75, рост 180» → сохрани все три сразу.
+- Сохраняй каждый факт СРАЗУ через update_user_profile, не жди пока соберёшь всё.
+- Если пользователь пишет о еде, сне или тренировке — НЕ записывай. Скажи: «Запомню, но сначала давай закончим настройку. Мне ещё нужно узнать: [список]».
+- Если после обработки сообщения остались незаполненные поля — спроси о них. Будь дружелюбным, не допрашивай.
+- Когда ВСЕ поля заполнены — вызови get_user_profile и отправь итоговую сводку. Подтверди, что настройка завершена.
+- Отвечай кратко и дружелюбно.
+"""
+
 BASE_SYSTEM_PROMPT = """Ты — персональный ассистент: нутрициолог, тренер и специалист по восстановлению в одном.
 
 Всегда учитывай ВСЮ картину: питание + нагрузка + сон + recovery связаны. Не давай советов в отрыве от остальных факторов.
@@ -75,18 +101,6 @@ BASE_SYSTEM_PROMPT = """Ты — персональный ассистент: н
 Цели по питанию:
 - Когда пользователь называет цель по калориям или белку — ОБЯЗАТЕЛЬНО сохрани через update_user_profile(category="goals", key="daily_calories", value="2500") и/или update_user_profile(category="goals", key="daily_protein_g", value="150"). Диапазон тоже допустим: value="110-150".
 - Используй эти цели при оценке питания: показывай не просто итого, а процент от цели.
-
-Онбординг:
-- Если в контексте есть «🔒 РЕЖИМ ОНБОРДИНГА» — основной функционал ЗАБЛОКИРОВАН.
-- В этом режиме НЕ вызывай save_meal_log, save_sleep_log, save_workout_log, save_note, get_recent_logs, get_daily_recommendation_context, get_week_summary, get_current_state.
-- Единственная задача — заполнить профиль через update_user_profile.
-- Пол (sex): сохраняй как «M» или «F». Определяй из контекста: «мужчина/парень/м» → M, «женщина/девушка/ж» → F.
-- Уровень бытовой активности (activity_level): определяй из описания образа жизни и сохраняй одно из значений:
-  «low» — офис, мало шагов, сидячая работа, работа из дома
-  «moderate» — офис + прогулки, 6-8k шагов, гуляет с собакой
-  «high» — активная работа на ногах, 10k+ шагов, много ходит пешком
-  «very_high» — физический труд, курьер, стройка, постоянное движение
-  Это бытовая активность БЕЗ учёта тренировок. Тренировки учитываются отдельно через WHOOP strain.
 
 Память:
 - Когда пользователь сообщает устойчивый факт о себе (цель, вес, аллергия, предпочтения, режим) — сохрани через update_user_profile.
@@ -127,32 +141,43 @@ WHOOP:
 - Для проверки подключения — get_whoop_status.
 """
 
+# --- Tools ---
+
+ONBOARDING_TOOLS = [
+    get_today_date,
+    get_user_profile,
+    update_user_profile,
+]
+
+MAIN_TOOLS = [
+    get_today_date,
+    get_user_profile,
+    save_sleep_log,
+    save_meal_log,
+    save_workout_log,
+    save_note,
+    get_recent_logs,
+    delete_log,
+    update_user_profile,
+    delete_memory_item,
+    save_derived_rule,
+    get_current_state,
+    get_daily_recommendation_context,
+    get_week_summary,
+    search_meal_catalog,
+    get_whoop_status,
+    sync_whoop_now,
+    get_latest_whoop_metrics,
+    save_body_metric,
+    get_weight_history,
+]
+
+# Агент-шаблон (instructions и tools подменяются динамически в run_agent)
 health_agent = Agent(
     name="Health Agent",
     instructions=BASE_SYSTEM_PROMPT,
     model=settings.openai_model,
-    tools=[
-        get_today_date,
-        get_user_profile,
-        save_sleep_log,
-        save_meal_log,
-        save_workout_log,
-        save_note,
-        get_recent_logs,
-        delete_log,
-        update_user_profile,
-        delete_memory_item,
-        save_derived_rule,
-        get_current_state,
-        get_daily_recommendation_context,
-        get_week_summary,
-        search_meal_catalog,
-        get_whoop_status,
-        sync_whoop_now,
-        get_latest_whoop_metrics,
-        save_body_metric,
-        get_weight_history,
-    ],
+    tools=MAIN_TOOLS,
 )
 
 
@@ -178,20 +203,33 @@ async def run_agent(
     if user_id:
         set_user_id(user_id)
 
+    # Определяем режим: онбординг или основной
+    from app.agent.context import get_missing_profile_fields
+    is_onboarding = False
+    if user_id:
+        missing = await get_missing_profile_fields(user_id)
+        is_onboarding = bool(missing)
+
     # Selective memory injection — подгружаем контекст из БД
     dynamic_context = ""
     if user_id:
         dynamic_context = await build_user_context(user_id)
 
-    instructions = BASE_SYSTEM_PROMPT
+    if is_onboarding:
+        instructions = ONBOARDING_PROMPT
+        tools = ONBOARDING_TOOLS
+    else:
+        instructions = BASE_SYSTEM_PROMPT
+        tools = MAIN_TOOLS
+
     if dynamic_context:
         instructions += f"\n\n--- Контекст пользователя ---\n{dynamic_context}\n---"
 
     # Выбор модели через роутер
     model_used = choose_model(user_message, has_image=bool(image_url))
 
-    # Создаём агента с динамическим промптом
-    agent = health_agent.clone(instructions=instructions, model=model_used)
+    # Создаём агента с динамическим промптом и набором tools
+    agent = health_agent.clone(instructions=instructions, tools=tools, model=model_used)
 
     # Ключ для истории
     history_key = str(user_id) if user_id else "_anonymous"

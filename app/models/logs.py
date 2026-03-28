@@ -117,6 +117,24 @@ class BodyMetric(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CycleLog(Base):
+    __tablename__ = "cycle_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    date: Mapped[date] = mapped_column(Date)
+    day_strain: Mapped[float | None] = mapped_column(Float)
+    kilojoules: Mapped[float | None] = mapped_column(Float)
+    avg_hr: Mapped[float | None] = mapped_column(Float)
+    max_hr: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(20), default=Source.whoop_api.value)
+    external_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DailyNote(Base):
     __tablename__ = "daily_notes"
 

@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.config import settings, today_msk
 from app.database import async_session
-from app.models.logs import SleepLog, RecoveryLog, WorkoutLog, BodyMetric
+from app.models.logs import SleepLog, RecoveryLog, WorkoutLog, BodyMetric, CycleLog
 from app.models.whoop import SyncEvent
 from app.whoop.client import get_whoop_client
 
@@ -65,6 +65,15 @@ async def sync_whoop_data(user_id: uuid.UUID, days: int = 7) -> str:
     except Exception as e:
         logger.exception("WHOOP workout sync error")
         results.append(f"Тренировки: ошибка ({e})")
+
+    # --- Cycles (дневной strain) ---
+    try:
+        cycles = await client.get_cycles(start_date=start, limit=25)
+        cycles_synced = await _sync_cycles(user_id, cycles)
+        results.append(f"Cycles: {cycles_synced} записей")
+    except Exception as e:
+        logger.exception("WHOOP cycles sync error")
+        results.append(f"Cycles: ошибка ({e})")
 
     # --- Вес (антропометрия) ---
     try:
@@ -367,3 +376,52 @@ async def _sync_body_measurement(user_id: uuid.UUID, body: dict) -> bool:
         logger.info("Body weight synced from WHOOP: %.1f kg", weight_kg)
 
     return True
+
+async def _sync_cycles(user_id: uuid.UUID, records: list[dict]) -> int:
+    """Сохраняет cycle данные (дневной strain) из WHOOP."""
+    synced = 0
+    async with async_session() as session:
+        for rec in records:
+            if rec.get("score_state") != "SCORED":
+                continue
+
+            score = rec.get("score", {})
+            if not score:
+                continue
+
+            external_id = f"whoop_cycle_{rec['id']}"
+
+            start_dt = _parse_iso(rec.get("start"))
+            cycle_date = start_dt.astimezone(_tz).date() if start_dt else today_msk()
+
+            existing = (await session.execute(
+                select(CycleLog).where(CycleLog.external_id == external_id)
+            )).scalar_one_or_none()
+
+            if existing:
+                if existing.deleted_at is None:
+                    continue
+                existing.date = cycle_date
+                existing.day_strain = score.get("strain")
+                existing.kilojoules = score.get("kilojoule")
+                existing.avg_hr = score.get("average_heart_rate")
+                existing.max_hr = score.get("max_heart_rate")
+                existing.last_synced_at = datetime.now(timezone.utc)
+                existing.deleted_at = None
+            else:
+                log = CycleLog(
+                    user_id=user_id,
+                    date=cycle_date,
+                    day_strain=score.get("strain"),
+                    kilojoules=score.get("kilojoule"),
+                    avg_hr=score.get("average_heart_rate"),
+                    max_hr=score.get("max_heart_rate"),
+                    source="whoop_api",
+                    external_id=external_id,
+                    last_synced_at=datetime.now(timezone.utc),
+                )
+                session.add(log)
+            synced += 1
+
+        await session.commit()
+    return synced

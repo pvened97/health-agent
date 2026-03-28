@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.agent.tools._context import get_user_id
 from app.database import async_session
-from app.models.logs import SleepLog, RecoveryLog, WorkoutLog
+from app.models.logs import SleepLog, RecoveryLog, WorkoutLog, CycleLog
 from app.models.whoop import WhoopConnection
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,31 @@ async def get_latest_whoop_metrics(days: int = 3) -> str:
             )
             .order_by(RecoveryLog.date.desc())
         )).scalars().all()
+
+        # Day Strain (cycles)
+        cycles = (await session.execute(
+            select(CycleLog)
+            .where(
+                CycleLog.user_id == user_id,
+                CycleLog.date >= since,
+                CycleLog.source == "whoop_api",
+                CycleLog.deleted_at.is_(None),
+            )
+            .order_by(CycleLog.date.desc())
+        )).scalars().all()
+
+        if cycles:
+            lines.append("=== Day Strain (WHOOP) ===")
+            for c in cycles:
+                parts = [f"  {c.date}:"]
+                if c.day_strain is not None:
+                    zone = "тяжёлый" if c.day_strain >= 14 else "средний" if c.day_strain >= 8 else "лёгкий"
+                    parts.append(f"strain={c.day_strain:.1f} ({zone})")
+                if c.kilojoules is not None:
+                    parts.append(f"{round(c.kilojoules / 4.184)}ккал")
+                if c.avg_hr is not None:
+                    parts.append(f"avg HR={c.avg_hr:.0f}")
+                lines.append(" ".join(parts))
 
         if recoveries:
             lines.append("=== Recovery (WHOOP) ===")

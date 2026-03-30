@@ -133,7 +133,7 @@ async def get_whoop_client(user_id) -> WhoopClient | None:
         stmt = select(WhoopConnection).where(
             WhoopConnection.user_id == user_id,
             WhoopConnection.is_active.is_(True),
-        )
+        ).order_by(WhoopConnection.created_at.desc()).limit(1)
         conn = (await session.execute(stmt)).scalar_one_or_none()
 
     if not conn:
@@ -148,7 +148,7 @@ async def get_whoop_client_by_whoop_user_id(whoop_user_id: int) -> tuple[WhoopCl
         stmt = select(WhoopConnection).where(
             WhoopConnection.whoop_user_id == str(whoop_user_id),
             WhoopConnection.is_active.is_(True),
-        )
+        ).order_by(WhoopConnection.created_at.desc()).limit(1)
         conn = (await session.execute(stmt)).scalar_one_or_none()
 
     if not conn:

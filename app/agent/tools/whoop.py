@@ -27,7 +27,7 @@ async def get_whoop_status() -> str:
             select(WhoopConnection).where(
                 WhoopConnection.user_id == user_id,
                 WhoopConnection.is_active.is_(True),
-            )
+            ).order_by(WhoopConnection.created_at.desc()).limit(1)
         )).scalar_one_or_none()
 
     if not conn:

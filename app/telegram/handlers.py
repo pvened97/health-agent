@@ -297,7 +297,7 @@ async def handle_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             select(WhoopConnection).where(
                 WhoopConnection.user_id == user.id,
                 WhoopConnection.is_active.is_(True),
-            )
+            ).order_by(WhoopConnection.created_at.desc()).limit(1)
         )).scalar_one_or_none()
 
     if conn:
@@ -316,7 +316,7 @@ async def handle_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         # Не подключён — даём ссылку на авторизацию
         from app.whoop.oauth import get_authorization_url
-        auth_url = get_authorization_url()
+        auth_url = get_authorization_url(user_id=str(user.id))
         await update.message.reply_text(
             "WHOOP не подключён.\n\n"
             f"Для подключения перейди по ссылке:\n{auth_url}\n\n"

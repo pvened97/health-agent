@@ -62,7 +62,6 @@ async def lifespan(app: FastAPI):
         nightly_whoop_sync,
         evening_summary,
         weekly_streak_check,
-        sleep_trend_check,
         weekly_summary,
     )
 
@@ -89,11 +88,6 @@ async def lifespan(app: FastAPI):
         weekly_streak_check, CronTrigger(day_of_week="mon", hour=10, minute=0, timezone=tz),
         args=[bot], id="weekly_streak",
     )
-    scheduler.add_job(
-        sleep_trend_check, CronTrigger(day_of_week="mon", hour=10, minute=5, timezone=tz),
-        args=[bot], id="sleep_trend",
-    )
-
     # Недельный обзор — воскресенье 20:00 Мск
     scheduler.add_job(
         weekly_summary, CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=tz),
@@ -153,10 +147,11 @@ async def whoop_webhook(request: Request):
 
 @app.get("/whoop/auth")
 async def whoop_auth():
-    """Редиректит на WHOOP OAuth авторизацию."""
-    from app.whoop.oauth import get_authorization_url
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(get_authorization_url())
+    """Авторизация WHOOP — только через Telegram команду /whoop."""
+    return HTMLResponse(
+        "<h1>Используй команду /whoop в Telegram для подключения WHOOP</h1>",
+        status_code=400,
+    )
 
 
 @app.get("/whoop/callback")
@@ -171,20 +166,20 @@ async def whoop_callback(request: Request):
         return HTMLResponse("<h1>Ошибка: код авторизации не получен</h1>", status_code=400)
 
     try:
-        from app.whoop.oauth import exchange_code_for_tokens
+        from app.whoop.oauth import exchange_code_for_tokens, validate_state
         from app.whoop.sync import sync_whoop_data
-        from sqlalchemy import select
-        from app.database import async_session
-        from app.models.user import User
+        from uuid import UUID
 
-        # Берём единственного пользователя (MVP)
-        async with async_session() as session:
-            user = (await session.execute(select(User))).scalar_one()
+        state = request.query_params.get("state", "")
+        user_id_str = validate_state(state)
+        if user_id_str is None:
+            return HTMLResponse("<h1>Ошибка: неверный state</h1>", status_code=400)
 
-        await exchange_code_for_tokens(code, user.id)
+        user_id = UUID(user_id_str)
+        await exchange_code_for_tokens(code, user_id)
 
         # Сразу синхронизируем данные за последние 7 дней
-        result = await sync_whoop_data(user.id, days=7)
+        result = await sync_whoop_data(user_id, days=7)
         logger.info("WHOOP connected and synced: %s", result)
 
         return HTMLResponse(

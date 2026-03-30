@@ -86,15 +86,14 @@ class TestWhoopWebhookEndpoint:
 # ============================================================
 class TestWhoopOAuth:
     @pytest.mark.asyncio
-    async def test_auth_redirects(self, app):
+    async def test_auth_requires_telegram(self, app):
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
             follow_redirects=False,
         ) as client:
             resp = await client.get("/whoop/auth")
-        assert resp.status_code in (302, 307)
-        assert "api.prod.whoop.com" in resp.headers.get("location", "")
+        assert resp.status_code == 400
 
     @pytest.mark.asyncio
     async def test_callback_without_code_returns_error(self, app):

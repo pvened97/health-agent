@@ -22,10 +22,10 @@ SCOPES = "read:profile read:body_measurement read:cycles read:recovery read:slee
 _pending_states: dict[str, str] = {}
 
 
-def get_authorization_url() -> str:
+def get_authorization_url(user_id: str = "") -> str:
     """Возвращает URL для авторизации пользователя в WHOOP."""
     state = secrets.token_urlsafe(32)
-    _pending_states[state] = state  # для валидации в callback
+    _pending_states[state] = str(user_id) if user_id else ""
     params = {
         "client_id": settings.whoop_client_id,
         "redirect_uri": settings.whoop_redirect_uri,
@@ -36,9 +36,9 @@ def get_authorization_url() -> str:
     return f"{AUTH_URL}?{urlencode(params)}"
 
 
-def validate_state(state: str) -> bool:
-    """Проверяет и удаляет state из pending."""
-    return _pending_states.pop(state, None) is not None
+def validate_state(state: str) -> str | None:
+    """Проверяет и удаляет state из pending. Возвращает user_id или None."""
+    return _pending_states.pop(state, None)
 
 
 async def exchange_code_for_tokens(code: str, user_id) -> WhoopConnection:
@@ -74,9 +74,14 @@ async def exchange_code_for_tokens(code: str, user_id) -> WhoopConnection:
         logger.warning("Could not fetch WHOOP user_id from profile")
 
     async with async_session() as session:
-        # Ищем существующее подключение
-        stmt = select(WhoopConnection).where(WhoopConnection.user_id == user_id)
-        conn = (await session.execute(stmt)).scalar_one_or_none()
+        # Ищем существующее подключение (берём последнее, дубли удаляем)
+        stmt = select(WhoopConnection).where(
+            WhoopConnection.user_id == user_id
+        ).order_by(WhoopConnection.created_at.desc())
+        all_conns = (await session.execute(stmt)).scalars().all()
+        conn = all_conns[0] if all_conns else None
+        for dup in all_conns[1:]:
+            await session.delete(dup)
 
         if conn:
             conn.access_token = data["access_token"]

@@ -119,21 +119,28 @@ async def get_daily_recommendation_context(target_date: str = "") -> str:
         if avg_sleep:
             sections.append(f"Средний сон за 7 дн.: {int(avg_sleep)} мин ({avg_sleep / 60:.1f}ч), записей: {sleep_count}")
 
-        # --- Цели по питанию из профиля ---
-        cal_min, cal_max = None, None
-        prot_min, prot_max = None, None
-        goals_stmt = select(UserProfile).where(
-            UserProfile.user_id == user_id,
-            UserProfile.category == "goals",
-            UserProfile.key.in_(["daily_calories", "daily_protein_g"]),
-            UserProfile.deleted_at.is_(None),
-        )
-        goals = (await session.execute(goals_stmt)).scalars().all()
-        for g in goals:
-            if g.key == "daily_calories":
-                cal_min, cal_max = _parse_goal(g.value)
-            elif g.key == "daily_protein_g":
-                prot_min, prot_max = _parse_goal(g.value)
+        # --- Цели по питанию (рассчитанные или из профиля) ---
+        from app.agent.tools.calorie_calc import compute_daily_targets
+        targets = await compute_daily_targets(user_id, target)
+
+        if targets:
+            cal_min, cal_max = targets["target_cal"], targets["target_cal"]
+            prot_min, prot_max = targets["target_prot"], targets["target_prot"]
+        else:
+            cal_min, cal_max = None, None
+            prot_min, prot_max = None, None
+            goals_stmt = select(UserProfile).where(
+                UserProfile.user_id == user_id,
+                UserProfile.category == "goals",
+                UserProfile.key.in_(["daily_calories", "daily_protein_g"]),
+                UserProfile.deleted_at.is_(None),
+            )
+            goals = (await session.execute(goals_stmt)).scalars().all()
+            for g in goals:
+                if g.key == "daily_calories":
+                    cal_min, cal_max = _parse_goal(g.value)
+                elif g.key == "daily_protein_g":
+                    prot_min, prot_max = _parse_goal(g.value)
 
         # --- Питание за целевой день ---
         meals_stmt = select(

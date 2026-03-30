@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 from app.config import today_msk
 from app.database import async_session
 from app.models.user import User, TelegramAccount
-from app.models.logs import SleepLog, MealLog
+from app.models.logs import SleepLog, MealLog, WorkoutLog
 from app.models.whoop import WhoopConnection
 from app.telegram.handlers import _md_to_html
 
@@ -103,15 +103,33 @@ async def evening_summary(bot):
     """Вечерний итог дня: тренировки и питание за сегодня."""
     from app.agent.agent import run_agent
 
+    today = today_msk()
+
     for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
+
+        # Не отправляем если за сегодня нет ни одной записи о еде
+        async with async_session() as session:
+            meal_count = (await session.execute(
+                select(func.count(MealLog.id)).where(
+                    MealLog.user_id == user.id,
+                    MealLog.date == today,
+                    MealLog.deleted_at.is_(None),
+                )
+            )).scalar() or 0
+
+        if meal_count == 0:
+            logger.info("Skipping evening summary for user %s: no meals today", user.id)
+            continue
+
         try:
             response = await run_agent(
-                "Дай краткий итог дня: что я ел сегодня (калории, белок) "
-                "и какие тренировки были. Обязательно сравни калории и белок с моими целями из профиля "
-                "(покажи сколько набрал / сколько цель, процент выполнения). "
-                "Если данных нет — скажи об этом. Коротко, 3-5 предложений.",
+                "Дай краткий итог дня. Вызови get_nutrition_remaining чтобы увидеть баланс калорий и макросов. "
+                "Оформи каждый раздел отдельным абзацем с эмодзи:\n"
+                "🍽 Питание: сколько съедено / цель / процент\n"
+                "🏋️ Тренировки (если были): упомяни что норма учитывает нагрузку\n"
+                "⚡️ Краткий вывод. Коротко, 3-5 предложений.",
                 user_id=user.id,
                 trigger="scheduler",
             )
@@ -226,21 +244,53 @@ async def sleep_trend_check(bot):
 
 
 async def weekly_summary(bot):
-    """Воскресный недельный обзор."""
+    """Воскресный недельный обзор. Отправляется только если за неделю есть минимум 3 дня с данными."""
     from app.agent.agent import run_agent
+
+    today = today_msk()
+    week_start = today - timedelta(days=today.weekday())
+    MIN_DAYS = 3
 
     for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
+
+        # Проверяем достаточность данных: минимум 3 дня с записями о еде ИЛИ тренировках
+        async with async_session() as session:
+            meal_days = (await session.execute(
+                select(func.count(func.distinct(MealLog.date))).where(
+                    MealLog.user_id == user.id,
+                    MealLog.date >= week_start,
+                    MealLog.date <= today,
+                    MealLog.deleted_at.is_(None),
+                )
+            )).scalar() or 0
+
+            workout_days = (await session.execute(
+                select(func.count(func.distinct(WorkoutLog.date))).where(
+                    WorkoutLog.user_id == user.id,
+                    WorkoutLog.date >= week_start,
+                    WorkoutLog.date <= today,
+                    WorkoutLog.deleted_at.is_(None),
+                )
+            )).scalar() or 0
+
+        if max(meal_days, workout_days) < MIN_DAYS:
+            logger.info(
+                "Skipping weekly summary for user %s: only %d meal days, %d workout days",
+                user.id, meal_days, workout_days,
+            )
+            continue
+
         try:
             response = await run_agent(
                 "Дай подробный обзор за эту неделю. Вызови get_week_summary для текущей и прошлой недели. "
-                "По каждому параметру скажи стало лучше или хуже:\n"
-                "- Сон: средняя длительность, дельта с прошлой неделей\n"
-                "- Питание: среднее ккал и белок в день, сравни с целями из профиля (факт vs цель, %), дельта\n"
-                "- Тренировки: количество, общее время, дельта\n"
-                "- Recovery: средний score и HRV, дельта\n"
-                "В конце — краткий вывод: что улучшилось, что ухудшилось, на что обратить внимание.",
+                "Оформи каждый раздел отдельным абзацем с эмодзи:\n"
+                "😴 Сон: средняя длительность, дельта с прошлой неделей\n"
+                "🍽 Питание: среднее ккал и белок в день, сравни с рассчитанной нормой (факт vs цель, %), дельта\n"
+                "🏋️ Тренировки: количество, общее время, дельта\n"
+                "💚 Recovery: средний score и HRV, дельта\n"
+                "⚡️ В конце — краткий вывод: что улучшилось, что ухудшилось, на что обратить внимание.",
                 user_id=user.id,
                 trigger="scheduler",
             )

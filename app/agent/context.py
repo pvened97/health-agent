@@ -123,12 +123,12 @@ async def build_user_context(user_id: uuid.UUID) -> str:
                 sleep_parts.append(f"  Качество: {last_sleep.quality}")
             sections.append("\n".join(sleep_parts))
 
-        # --- Питание за сегодня ---
+        # --- Баланс питания за сегодня ---
         today = today_msk()
         meals_stmt = select(
             func.count(MealLog.id),
-            func.sum(MealLog.calories),
-            func.sum(MealLog.protein_g),
+            func.coalesce(func.sum(MealLog.calories), 0),
+            func.coalesce(func.sum(MealLog.protein_g), 0),
         ).where(
             MealLog.user_id == user_id,
             MealLog.date == today,
@@ -137,13 +137,25 @@ async def build_user_context(user_id: uuid.UUID) -> str:
         meal_row = (await session.execute(meals_stmt)).one()
         meal_count, total_cal, total_prot = meal_row
 
-        if meal_count:
-            meal_info = "Питание сегодня:"
-            if total_cal:
-                meal_info += f", ~{int(total_cal)} ккал"
-            if total_prot:
-                meal_info += f", белок ~{total_prot:.0f}г"
-            sections.append(meal_info)
+    # Вычисляем дневную норму (lazy import — avoid circular)
+    from app.agent.tools.calorie_calc import compute_daily_targets
+    targets = await compute_daily_targets(user_id, today)
+
+    if targets and meal_count:
+        pct = int(total_cal / targets["target_cal"] * 100) if targets["target_cal"] else 0
+        rem_cal = targets["target_cal"] - int(total_cal)
+        rem_prot = targets["target_prot"] - round(total_prot)
+        bal_parts = [f"Питание сегодня ({meal_count} приёмов):"]
+        bal_parts.append(f"  Калории: {int(total_cal)} / {targets['target_cal']} ккал ({pct}%), осталось {rem_cal}")
+        bal_parts.append(f"  Белок: {round(total_prot)}г / {targets['target_prot']}г, осталось {rem_prot}г")
+        sections.append("\n".join(bal_parts))
+    elif targets and not meal_count:
+        sections.append(f"Питание сегодня: нет записей. Цель: {targets['target_cal']} ккал, белок {targets['target_prot']}г")
+    elif meal_count:
+        meal_info = f"Питание сегодня: ~{int(total_cal)} ккал, белок ~{round(total_prot)}г (норма не рассчитана)"
+        sections.append(meal_info)
+
+    async with async_session() as session:
 
         # --- Последний recovery (WHOOP) ---
         recovery_stmt = (

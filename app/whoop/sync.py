@@ -52,10 +52,10 @@ async def sync_whoop_data(user_id: uuid.UUID, days: int = 7) -> str:
     try:
         recovery_records = await client.get_recovery(start_date=start, limit=25)
         recovery_synced = await _sync_recovery(user_id, recovery_records)
-        results.append(f"Recovery: {recovery_synced} записей")
+        results.append(f"Восстановление: {recovery_synced} записей")
     except Exception as e:
         logger.exception("WHOOP recovery sync error")
-        results.append(f"Recovery: ошибка ({e})")
+        results.append(f"Восстановление: ошибка ({e})")
 
     # --- Тренировки ---
     try:
@@ -70,10 +70,10 @@ async def sync_whoop_data(user_id: uuid.UUID, days: int = 7) -> str:
     try:
         cycles = await client.get_cycles(start_date=start, limit=25)
         cycles_synced = await _sync_cycles(user_id, cycles)
-        results.append(f"Cycles: {cycles_synced} записей")
+        results.append(f"Дневная нагрузка: {cycles_synced} записей")
     except Exception as e:
         logger.exception("WHOOP cycles sync error")
-        results.append(f"Cycles: ошибка ({e})")
+        results.append(f"Дневная нагрузка: ошибка ({e})")
 
     # --- Вес (антропометрия) ---
     try:

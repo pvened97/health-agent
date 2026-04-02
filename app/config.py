@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     whoop_client_secret: str = ""
     whoop_redirect_uri: str = "http://localhost:8000/whoop/callback"
 
+    # FatSecret
+    fatsecret_consumer_key: str = ""
+    fatsecret_consumer_secret: str = ""
+
     # App
     app_env: str = "dev"
     log_level: str = "INFO"

@@ -31,6 +31,14 @@ def _md_to_html(text: str) -> str:
     return text
 
 
+async def _safe_reply(update: Update, text: str) -> None:
+    """Отправляет ответ с HTML-форматированием, fallback на plain text."""
+    try:
+        await update.message.reply_text(_md_to_html(text), parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text(text)
+
+
 async def _send_typing_while(chat_id: int, bot, task: asyncio.Task) -> None:
     """Отправляет 'typing...' каждые 4 секунды, пока task не завершится."""
     while not task.done():
@@ -76,17 +84,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         response = await agent_task
     except Exception as e:
         logger.exception("Agent error for user %s", update.effective_user.id)
-        error_name = type(e).__name__
-        error_msg = str(e)[:200]
-        response = f"Ошибка: {error_name}\n{error_msg}"
+        response = "Произошла непредвиденная ошибка. Если повторяется — сообщи в поддержку."
     finally:
         typing_task.cancel()
 
-    try:
-        await update.message.reply_text(_md_to_html(response), parse_mode=ParseMode.HTML)
-    except Exception:
-        # Fallback без форматирования если HTML невалидный
-        await update.message.reply_text(response)
+    await _safe_reply(update, response)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -119,16 +121,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         response = await agent_task
     except Exception as e:
         logger.exception("Agent error (photo) for user %s", update.effective_user.id)
-        error_name = type(e).__name__
-        error_msg = str(e)[:200]
-        response = f"Ошибка (фото): {error_name}\n{error_msg}"
+        response = "Не удалось обработать фото. Попробуй ещё раз или отправь описание текстом."
     finally:
         typing_task.cancel()
 
-    try:
-        await update.message.reply_text(_md_to_html(response), parse_mode=ParseMode.HTML)
-    except Exception:
-        await update.message.reply_text(response)
+    await _safe_reply(update, response)
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -151,10 +148,18 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "- Синхронизировать данные с WHOOP"
     )
 
+    photo_tips = (
+        "Как лучше фотографировать еду:\n"
+        "- Положи рядом вилку, ложку или другой предмет — так я точнее определю размер порции\n"
+        "- Подпиши что это и сколько, если знаешь — например «куриная грудка 200г» или «борщ»\n"
+        "- Фотографируй при хорошем освещении, чтобы блюдо было чётко видно"
+    )
+
     if not missing:
         await update.message.reply_text(
             f"Привет! Я — персональный ассистент по здоровью.\n\n"
             f"{capabilities}\n\n"
+            f"{photo_tips}\n\n"
             "Просто напиши — я на связи.\n\n"
             "/whoop — подключить WHOOP\n"
             "/help — подробнее о командах"
@@ -171,7 +176,8 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "- Цель: набор массы, похудение, поддержание формы или рекомпозиция\n"
         "- Уровень бытовой активности (сидячая работа, активный день, физический труд)\n\n"
         "Можешь написать всё в одном сообщении, например:\n"
-        "«Мужчина, 28 лет, 180/75, хочу набрать массу, работаю в офисе»"
+        "«Мужчина, 28 лет, 180/75, хочу набрать массу, работаю в офисе»\n\n"
+        f"{photo_tips}"
     )
 
     # Очищаем историю для чистого онбординга

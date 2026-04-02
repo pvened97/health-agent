@@ -122,8 +122,6 @@ async def save_meal_log(
         macros.append(f"Ж {fat_g}г")
     if carbs_g:
         macros.append(f"У {carbs_g}г")
-    if fiber_g:
-        macros.append(f"Клетчатка {fiber_g}г")
     if macros:
         parts.append(" / ".join(macros))
     return " ".join(parts)
@@ -275,8 +273,6 @@ async def get_recent_logs(
                 macros.append(f"Ж {row.fat_g}г")
             if row.carbs_g:
                 macros.append(f"У {row.carbs_g}г")
-            if row.fiber_g:
-                macros.append(f"Клетч. {row.fiber_g}г")
             macro_str = f" ({' / '.join(macros)})" if macros else ""
             lines.append(f"  [{rid}] {row.date} {row.meal_type or ''}: {row.description}{cal}{macro_str}")
         elif log_type == "workout":

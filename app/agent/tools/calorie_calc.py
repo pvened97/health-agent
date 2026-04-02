@@ -174,9 +174,9 @@ def _get_recovery_modifier(recovery_score: float | None) -> tuple[float, str]:
 async def compute_daily_targets(user_id: "uuid.UUID", calc_date: date) -> dict | None:
     """Вычисляет дневные цели по калориям и макросам. Возвращает dict или None если профиль не заполнен.
 
-    Результат: {target_cal, target_prot, target_fat, target_carbs, target_fiber,
+    Результат: {target_cal, target_prot, target_fat, target_carbs,
                 bmr, base_maintenance, activity_mult, activity_level, load_adjustment,
-                load_source, surplus, is_bulk, primary_goal, recovery_label, recovery_mod,
+                load_source, adjustment, goal_type, primary_goal, recovery_label, recovery_mod,
                 day_strain, workout_mod, workout_type_name, used_manual_estimate,
                 strain_bonus?, manual_bonus?, manual_desc?}
     """
@@ -298,12 +298,9 @@ async def compute_daily_targets(user_id: "uuid.UUID", calc_date: date) -> dict |
     target_prot = round(2.0 * weight_kg) if goal_type in ("bulk", "recomp") else round(1.8 * weight_kg)
     target_fat = round(target_cal * 0.25 / 9)
     target_carbs = round(max(target_cal - target_prot * 4 - target_fat * 9, 0) / 4)
-    target_fiber = 30 if target_cal >= 2500 else 25
-
     return {
         "target_cal": target_cal, "target_prot": target_prot,
         "target_fat": target_fat, "target_carbs": target_carbs,
-        "target_fiber": target_fiber,
         "bmr": bmr, "base_maintenance": base_maintenance,
         "activity_mult": activity_mult, "activity_level": activity_level,
         "load_adjustment": load_adjustment, "load_source": load_source,
@@ -361,7 +358,6 @@ async def calculate_daily_target(target_date: Optional[str] = None) -> str:
     lines.append(f"  Белок: {t['target_prot']} г ({t['target_prot'] * 4} ккал)")
     lines.append(f"  Жиры: {t['target_fat']} г ({t['target_fat'] * 9} ккал)")
     lines.append(f"  Углеводы: {t['target_carbs']} г ({max(t['target_cal'] - t['target_prot'] * 4 - t['target_fat'] * 9, 0)} ккал)")
-    lines.append(f"  Клетчатка: {t['target_fiber']} г")
 
     return "\n".join(lines)
 
@@ -389,7 +385,6 @@ async def get_nutrition_remaining(target_date: Optional[str] = None) -> str:
                 func.coalesce(func.sum(MealLog.protein_g), 0),
                 func.coalesce(func.sum(MealLog.fat_g), 0),
                 func.coalesce(func.sum(MealLog.carbs_g), 0),
-                func.coalesce(func.sum(MealLog.fiber_g), 0),
                 func.count(MealLog.id),
             ).where(
                 MealLog.user_id == user_id,
@@ -398,14 +393,12 @@ async def get_nutrition_remaining(target_date: Optional[str] = None) -> str:
             )
         )).one()
 
-    eaten_cal, eaten_prot, eaten_fat, eaten_carbs, eaten_fiber, meal_count = eaten_row
+    eaten_cal, eaten_prot, eaten_fat, eaten_carbs, meal_count = eaten_row
 
     rem_cal = t["target_cal"] - int(eaten_cal)
     rem_prot = t["target_prot"] - round(eaten_prot)
     rem_fat = t["target_fat"] - round(eaten_fat)
     rem_carbs = t["target_carbs"] - round(eaten_carbs)
-    rem_fiber = t["target_fiber"] - round(eaten_fiber)
-
     pct = int(eaten_cal / t["target_cal"] * 100) if t["target_cal"] else 0
 
     lines = [f"Баланс дня ({calc_date}):"]
@@ -417,7 +410,6 @@ async def get_nutrition_remaining(target_date: Optional[str] = None) -> str:
     lines.append(f"    Белок:    {round(eaten_prot)}г → {t['target_prot']}г → {rem_prot}г")
     lines.append(f"    Жиры:     {round(eaten_fat)}г → {t['target_fat']}г → {rem_fat}г")
     lines.append(f"    Углеводы: {round(eaten_carbs)}г → {t['target_carbs']}г → {rem_carbs}г")
-    lines.append(f"    Клетчатка:{round(eaten_fiber)}г → {t['target_fiber']}г → {rem_fiber}г")
 
     if rem_cal < 0:
         lines.append(f"")

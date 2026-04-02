@@ -37,6 +37,7 @@ from app.agent.tools.catalog import search_meal_catalog
 from app.agent.tools.whoop import get_whoop_status, sync_whoop_now, get_latest_whoop_metrics
 from app.agent.tools.body import save_body_metric, get_weight_history
 from app.agent.tools.calorie_calc import calculate_daily_target, get_nutrition_remaining
+from app.agent.tools.food_db import lookup_food_nutrition
 from app.agent.context import build_user_context
 from app.agent.router import choose_model
 
@@ -102,10 +103,24 @@ BASE_SYSTEM_PROMPT = """Ты — персональный ассистент: н
 - Данные ТОЛЬКО через tools. Перед записью вызови get_today_date().
 - Когда пользователь спрашивает про конкретный день («за сегодня», «за вчера», «за 2026-03-20») — ВСЕГДА передавай specific_date в get_recent_logs. НЕ используй days для запроса за конкретный день.
 - Несколько событий в одном сообщении — отдельный tool call на каждое.
-- Еда → ВСЕГДА записывай все 5 нутриентов: calories, protein_g, fat_g, carbs_g, fiber_g. Время приёма пищи необязательно — не переспрашивай, если пользователь не указал.
+- Еда → ВСЕГДА записывай все 4 нутриента: calories, protein_g, fat_g, carbs_g. Время приёма пищи необязательно — не переспрашивай, если пользователь не указал.
 - ВАЖНО: если пользователь указал точные цифры (БЖУ, калории) для части продуктов — используй их КАК ЕСТЬ. Оценивай ТОЛЬКО те позиции, где цифр нет. Затем СЛОЖИ точные + оценочные. Пример: «вафли БЖУ 15/12/35 339 ккал, гранола 11/13/43 336 ккал, яблоко» → вафли 339 + гранола 336 + яблоко ~60 = 735 ккал. НЕ округляй, НЕ оценивай заново то, что уже посчитано.
 - Каждый продукт/блюдо в одном приёме пищи → один save_meal_log. Не объединяй несколько продуктов в одну запись. «Вафли + гранола + яблоко» = 3 отдельных save_meal_log.
-- Фото еды → определи блюда на изображении, оцени порцию, калории, БЖУ и клетчатку, запиши через save_meal_log. Если подпись к фото есть — учитывай её.
+- Справочник БЖУ: если пользователь НЕ указал точные цифры для продукта — СНАЧАЛА вызови lookup_food_nutrition(название продукта) на русском. Если справочник не нашёл — повтори запрос на английском (переведи название сам). Используй данные из справочника + оценённый вес порции для расчёта. Если и на английском не нашлось — оцени самостоятельно. НЕ вызывай lookup_food_nutrition если пользователь уже дал точные БЖУ.
+- Фото еды → ПОШАГОВЫЙ АНАЛИЗ:
+  1. Определи все блюда/продукты на фото.
+  2. Для каждого оцени размер порции. Ищи референсные объекты (вилка, ложка, нож, рука, стакан, тарелка ~25 см) — сравнивай размер еды с ними для калибровки. Котлета с ладонь ≈ 120–150 г, горка риса со столовую ложку ≈ 150 г.
+  3. Оцени калории и БЖУ каждого продукта, запиши каждый через отдельный save_meal_log.
+  4. Определи степень уверенности в оценке — одну из трёх:
+     • Уверен — блюдо чётко видно, порция понятна (есть референс или стандартная подача).
+     • Скорее уверен — блюдо определяется, но порция приблизительная (нет референса, еда в контейнере, частично закрыта).
+     • Не уверен — блюдо сложно определить, фото нечёткое, или разброс оценки калорий > 30%.
+  5. В ответе пользователю ОБЯЗАТЕЛЬНО покажи уровень уверенности. Если «Скорее уверен» или «Не уверен» — добавь КОНКРЕТНЫЙ совет, что улучшить:
+     • Нечёткое фото → «Попробуй сфотографировать ближе и при хорошем освещении»
+     • Непонятен размер → «Положи рядом вилку или ложку — так я точнее определю порцию»
+     • Непонятно блюдо → «Подпиши что это — мне сложно определить по фото»
+     • Еда закрыта/в контейнере → «Если можешь — сфотографируй открытой, сейчас часть не видна»
+  Если подпись к фото есть — учитывай её, она повышает точность.
 - Тренировка → ОБЯЗАТЕЛЬНО заполняй intensity (low/moderate/high/max) и duration_minutes. Если пользователь не указал — оцени сам из контекста: «побегал» без деталей → moderate 30 мин, «тяжёлая силовая 1.5 часа» → high 90 мин, «лёгкая йога» → low 45 мин. Эти данные используются для расчёта дневной нормы калорий.
 - Сон → извлеки длительность и время.
 - Исправление записей: если пользователь говорит что запись неправильная — СНАЧАЛА вызови get_recent_logs чтобы найти ID, затем удали старую через delete_log, затем создай новую правильную. НЕ просто добавляй новую поверх старой.
@@ -198,6 +213,7 @@ MAIN_TOOLS = [
     get_weight_history,
     calculate_daily_target,
     get_nutrition_remaining,
+    lookup_food_nutrition,
 ]
 
 # Агент-шаблон (instructions и tools подменяются динамически в run_agent)
@@ -217,6 +233,44 @@ def _trim_history(history: list, max_items: int = MAX_HISTORY_ITEMS) -> None:
         removed = history.pop(0)
         if isinstance(removed, dict) and removed.get("role") == "user":
             user_count -= 1
+
+
+def _classify_error(e: Exception) -> str:
+    """Возвращает понятное пользователю сообщение об ошибке."""
+    error_str = str(e).lower()
+    error_type = type(e).__name__
+
+    # OpenAI API errors
+    if "authenticationerror" in error_type.lower() or "invalid_api_key" in error_str:
+        return "Ошибка авторизации в OpenAI API. Сообщи администратору — нужно обновить API-ключ."
+
+    if "ratelimiterror" in error_type.lower() or "rate_limit" in error_str:
+        return "Превышен лимит запросов к AI. Подожди минуту и попробуй снова."
+
+    if "insufficient_quota" in error_str or "billing" in error_str:
+        return "Закончился баланс AI-сервиса. Сообщи в поддержку."
+
+    if "timeout" in error_str or "timed out" in error_str:
+        return "Запрос слишком долго обрабатывался. Попробуй упростить сообщение или повторить позже."
+
+    if "connection" in error_str and ("refused" in error_str or "reset" in error_str):
+        return "Не удалось подключиться к AI-сервису. Возможно, временные проблемы на стороне провайдера."
+
+    if "model_not_found" in error_str or "does not exist" in error_str:
+        return "Модель AI недоступна. Сообщи в поддержку."
+
+    if "context_length" in error_str or "maximum context" in error_str or "too many tokens" in error_str:
+        return "Сообщение слишком длинное для обработки. Попробуй написать короче."
+
+    # Database errors
+    if "connection refused" in error_str and "5432" in error_str:
+        return "База данных недоступна. Сообщи в поддержку."
+
+    if "operationalerror" in error_type.lower() or "databaseerror" in error_type.lower():
+        return "Ошибка базы данных. Сообщи в поддержку."
+
+    # Generic
+    return "Произошла непредвиденная ошибка. Если повторяется — сообщи в поддержку."
 
 
 async def run_agent(
@@ -286,11 +340,13 @@ async def run_agent(
 
     # Запускаем агента с полной историей
     error_text = None
+    user_error = None
     result = None
     try:
         result = await Runner.run(agent, history)
     except Exception as e:
         error_text = f"{type(e).__name__}: {e}"
+        user_error = _classify_error(e)
         logger.exception("Agent run failed")
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -364,9 +420,9 @@ async def run_agent(
         except Exception:
             logger.exception("Failed to save AgentRun to DB")
 
-    # Если агент упал — возвращаем дружелюбное сообщение
+    # Если агент упал — возвращаем понятное сообщение
     if error_text:
-        return "Произошла ошибка при обработке запроса. Попробуй ещё раз через пару секунд."
+        return user_error or "Произошла непредвиденная ошибка. Если повторяется — сообщи в поддержку."
 
     # Сохраняем ответ агента в историю
     new_items = result.to_input_list()

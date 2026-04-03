@@ -92,6 +92,7 @@ async def morning_checkin(bot):
                 "Дай краткую утреннюю сводку: мой recovery, как я спал, и рекомендацию на день. Коротко, 3-5 предложений.",
                 user_id=user.id,
                 trigger="scheduler",
+                intent_override="advice",
             )
             await _send_html(bot, tg_account.chat_id, response)
             logger.info("Morning check-in sent to user %s", user.id)
@@ -132,6 +133,7 @@ async def evening_summary(bot):
                 "⚡️ Краткий вывод. Коротко, 3-5 предложений.",
                 user_id=user.id,
                 trigger="scheduler",
+                intent_override="advice",
             )
             await _send_html(bot, tg_account.chat_id, response)
             logger.info("Evening summary sent to user %s", user.id)
@@ -293,6 +295,7 @@ async def weekly_summary(bot):
                 "⚡️ В конце — краткий вывод: что улучшилось, что ухудшилось, на что обратить внимание.",
                 user_id=user.id,
                 trigger="scheduler",
+                intent_override="advice",
             )
             await _send_html(bot, tg_account.chat_id, response)
             logger.info("Weekly summary sent to user %s", user.id)

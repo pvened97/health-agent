@@ -17,6 +17,7 @@ class AgentRun(Base):
     input_text: Mapped[str | None] = mapped_column(Text)
     output_text: Mapped[str | None] = mapped_column(Text)
     model: Mapped[str | None] = mapped_column(String(50))
+    intent: Mapped[str | None] = mapped_column(String(30))
     tokens_input: Mapped[int | None] = mapped_column(Integer)
     tokens_output: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int | None] = mapped_column(Integer)

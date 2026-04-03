@@ -1,0 +1,170 @@
+flowchart TD
+
+    subgraph infra ["Инфраструктура"]
+        TELEGRAM["Telegram API"]
+        FASTAPI["FastAPI\nuvicorn :8000"]
+        POSTGRES["PostgreSQL 16\nasyncpg + SQLAlchemy"]
+        OPENAI["OpenAI API\nGPT-5.4 / GPT-5.4-mini"]
+        FATSECRET["FatSecret API\nOAuth 1.0 HMAC-SHA1"]
+        WHOOP_API["WHOOP API\nOAuth 2.0 + webhooks"]
+        SCHEDULER["APScheduler\nAsyncIOScheduler"]
+    end
+
+    subgraph request_flow ["Поток обработки сообщения"]
+        TG_UPDATE["Telegram Update\ntext / photo / command"] --> HANDLER["handlers.py\nhandle_message\nhandle_photo\nhandle_start"]
+        HANDLER --> ACL["_ensure_allowed_user\nwhitelist по telegram_user_id"]
+        ACL --> USER_SVC["user_service.py\nget_or_create_user\nPostgreSQL"]
+        USER_SVC --> RUN_AGENT["run_agent()"]
+
+        RUN_AGENT --> ONBOARD_CHECK{"get_missing_profile_fields\nПрофиль заполнен?"}
+        ONBOARD_CHECK -->|Нет| USE_ONBOARD["ONBOARDING_PROMPT\n3 tools"]
+        ONBOARD_CHECK -->|Да| BUILD_CTX["build_user_context\nконтекст из БД"]
+
+        BUILD_CTX --> CTX_PARTS["quality rules\n+ профиль\n+ последний сон\n+ баланс питания\n+ WHOOP recovery\n+ derived rules"]
+        CTX_PARTS --> CLASSIFY["classify_intent\npattern matching"]
+
+        CLASSIFY --> INTENT_MAP["INTENT_CONFIG\nintent - prompt, tools"]
+        INTENT_MAP --> CHOOSE_MODEL["choose_model\nstrong / fast\nпо паттернам"]
+
+        USE_ONBOARD --> CLONE
+        CHOOSE_MODEL --> CLONE["agent.clone\ninstructions + tools + model"]
+
+        CLONE --> HISTORY["conversation_history\nin-memory, 5 сообщений"]
+        HISTORY --> RUNNER["Runner.run\nOpenAI Agents SDK"]
+
+        RUNNER --> TOOL_LOOP{"Tool calls?"}
+        TOOL_LOOP -->|Да| TOOLS_EXEC["Выполнение tools\nPostgreSQL / FatSecret / WHOOP"]
+        TOOLS_EXEC --> TOOL_LOOP
+        TOOL_LOOP -->|Нет| FINAL_OUTPUT["final_output\nтекст ответа"]
+
+        FINAL_OUTPUT --> SAVE_RUN["Сохранить AgentRun\nintent, model, tokens\nduration_ms, error"]
+        SAVE_RUN --> SAVE_TOOLS["Сохранить ToolCalls\ntool_name, arguments\nresult, error"]
+        SAVE_TOOLS --> UPDATE_HISTORY["Обновить\nconversation_history"]
+        UPDATE_HISTORY --> REPLY["_safe_reply\nMarkdown - HTML\nfallback plain text"]
+    end
+
+    subgraph intent_system ["Система интентов"]
+        ROUTER_IN["Входящее сообщение"] --> EXCL_CHECK["Проверка exclude-паттернов\nблокируют только свою категорию"]
+        EXCL_CHECK --> PATTERN_SCAN["Сканирование паттернов\nпо категориям"]
+        PATTERN_SCAN --> MULTI_CHECK{"Матчи из\n2+ категорий?"}
+        MULTI_CHECK -->|Да| TO_GENERAL["general - 22 tools"]
+        MULTI_CHECK -->|"1 матч"| TO_SPECIFIC["Специализированный\nprompt + tools"]
+        MULTI_CHECK -->|"0 матчей"| ADVICE_CHECK{"Advice\nпаттерны?"}
+        ADVICE_CHECK -->|Да| TO_ADVICE["advice - 11 tools\nread-only"]
+        ADVICE_CHECK -->|Нет| TO_GENERAL
+
+        I_PHOTO["food_photo\n4 tools"] ~~~ I_TEXT["food_text\n5 tools"]
+        I_TEXT ~~~ I_WORK["workout\n4 tools"]
+        I_WORK ~~~ I_BODY["body_state\n8 tools"]
+        I_BODY ~~~ I_ADV["advice\n11 tools"]
+        I_ADV ~~~ I_GEN["general\n22 tools"]
+    end
+
+    subgraph model_router ["Роутер моделей"]
+        MR_IN["Сообщение"] --> MR_PHOTO{"Фото?"}
+        MR_PHOTO -->|Да| MR_FAST["GPT-5.4-mini\nfast"]
+        MR_PHOTO -->|Нет| MR_STRONG_CHECK{"STRONG_PATTERNS?\nпосоветуй, итог,\nпочему, анализ"}
+        MR_STRONG_CHECK -->|Да| MR_STRONG["GPT-5.4\nstrong"]
+        MR_STRONG_CHECK -->|Нет| MR_FAST
+        MR_NOTE["Интент и модель\nвыбираются НЕЗАВИСИМО"]
+    end
+
+    subgraph context_injection ["Контекст-инъекция в system prompt"]
+        CI_START["build_user_context"] --> CI_QUALITY["1. Quality warnings\nсон менее 6ч 3 дня\nмало данных за неделю\nтяжелая тренировка вчера"]
+        CI_QUALITY --> CI_PROFILE["2. Профиль\nантропометрия, цели\nlifestyle, подтвержденные"]
+        CI_PROFILE --> CI_SLEEP["3. Последний сон\nза вчера/сегодня"]
+        CI_SLEEP --> CI_MEALS["4. Баланс питания\nсъедено vs цель\nккал, белок, %"]
+        CI_MEALS --> CI_RECOVERY["5. WHOOP recovery\nscore, HRV, пульс покоя\nцветовая зона"]
+        CI_RECOVERY --> CI_RULES["6. Derived rules\nconfidence 0.6+\nмакс 3 наблюдения"]
+        CI_RULES --> CI_INJECT["Добавить в\nsystem prompt"]
+    end
+
+    subgraph data_model ["Модель данных PostgreSQL"]
+        DB_USER["users"] --> DB_TG["telegram_accounts\n1:1"]
+        DB_USER --> DB_PROFILE["user_profile\ncategory / key / value\nconfirmed, soft delete"]
+        DB_USER --> DB_RULES["derived_rules\nrule, confidence\nevidence"]
+        DB_USER --> DB_MEALS["meal_logs\ndate, name, calories\nprotein, fat, carbs\nsource"]
+        DB_USER --> DB_SLEEP["sleep_logs\ndate, duration_min\nquality, bed/wake time\nsource"]
+        DB_USER --> DB_WORKOUT["workout_logs\ndate, type, duration\nintensity, strain\nsource"]
+        DB_USER --> DB_NOTES["daily_notes\ndate, text"]
+        DB_USER --> DB_RECOVERY["recovery_logs\ndate, score, hrv\nresting_hr, spo2\nsource"]
+        DB_USER --> DB_CYCLE["cycle_logs\ndate, day_strain\nsource"]
+        DB_USER --> DB_BODY["body_metrics\ndate, type, value, unit"]
+        DB_USER --> DB_WHOOP_CONN["whoop_connections\naccess/refresh token\nis_active, expires_at"]
+        DB_USER --> DB_AGENT_RUN["agent_runs\ntrigger, intent, model\ninput/output text\ntokens in/out\nduration_ms, error"]
+        DB_AGENT_RUN --> DB_TOOL_CALL["tool_calls\ntool_name\narguments JSON\nresult JSON\nerror"]
+
+        DB_PRINCIPLES["Принципы:\nsoft delete - deleted_at\nsource: user_manual /\nwhoop_api / agent_inferred\nidempotent по external_id"]
+    end
+
+    subgraph memory_model ["Memory Model - 4 слоя"]
+        MEM_PROFILE["1. Profile\nустойчивые факты\nцель, аллергии\nменяются с подтверждением"]
+        MEM_STATE["2. Current State\nагрегаты: текущий вес\nсредний сон за неделю\nпоследний recovery"]
+        MEM_EVENTS["3. Event Log\nсырые записи:\nсон, еда, тренировки\nзаметки"]
+        MEM_DERIVED["4. Derived Rules\nгипотезы с confidence:\nкофе после 18:00\nухудшает сон - 0.7"]
+
+        MEM_PROFILE --> MEM_STATE
+        MEM_STATE --> MEM_EVENTS
+        MEM_EVENTS --> MEM_DERIVED
+    end
+
+    subgraph tools_map ["Function Tools - 22 штуки"]
+        T_GRP_READ["READ\nget_today_date\nget_user_profile\nget_recent_logs\nget_current_state\nget_weight_history\nget_whoop_status\nget_latest_whoop_metrics"]
+        T_GRP_WRITE["WRITE\nsave_meal_log\nsave_sleep_log\nsave_workout_log\nsave_note\nsave_body_metric\nupdate_user_profile\nsave_derived_rule\ndelete_log\ndelete_memory_item"]
+        T_GRP_CALC["CALCULATE\ncalculate_daily_target\nget_nutrition_remaining\nget_daily_recommendation_context\nget_week_summary"]
+        T_GRP_EXTERNAL["EXTERNAL API\nlookup_food_nutrition\nFatSecret OAuth 1.0\nsearch_meal_catalog\nsync_whoop_now"]
+    end
+
+    subgraph endpoints ["HTTP Endpoints"]
+        EP_HEALTH["GET /health\nhealthcheck"]
+        EP_TG_WEBHOOK["POST /telegram/webhook\nTelegram updates - prod"]
+        EP_WHOOP_WEBHOOK["POST /whoop/webhook\nданные обновлены\nverify_signature"]
+        EP_WHOOP_CALLBACK["GET /whoop/callback\nOAuth callback\nexchange code - tokens"]
+    end
+
+    subgraph scheduler_detail ["Scheduler - APScheduler"]
+        SCH_ENGINE["AsyncIOScheduler\nCronTrigger\ntimezone Europe/Moscow"]
+        SCH_ENGINE --> SCH_REFRESH["Каждый час\nrefresh_whoop_tokens\nесли истекает менее 2ч"]
+        SCH_ENGINE --> SCH_SYNC["03:00\nnightly_whoop_sync\nподстраховка webhooks"]
+        SCH_ENGINE --> SCH_EVENING["22:00\nevening_summary\nintent_override=advice"]
+        SCH_ENGINE --> SCH_STREAK["Пн 10:00\nweekly_streak_check\n7 дней подряд"]
+        SCH_ENGINE --> SCH_WEEKLY["Вс 20:00\nweekly_summary\nintent_override=advice"]
+
+        SCH_GUARD["Guard-условия:\nevening - есть записи о еде\nweekly - 3+ дней с данными\nstreak - 7 дней подряд\nsleep trend - 3+ записей за неделю"]
+    end
+
+    subgraph deploy ["Развертывание"]
+        DEV["DEV\ndocker compose up -d postgres\nalembic upgrade head\npython -m app.main\npolling mode, hot reload"]
+        PROD["PROD\ndocker compose up -d\nwebhook mode\nTELEGRAM_WEBHOOK_URL\nJSON structured logs"]
+
+        ENV_VARS["Переменные .env:\nOPENAI_API_KEY\nTELEGRAM_BOT_TOKEN\nDATABASE_URL\nALLOWED_TELEGRAM_USER_IDS\nWHOOP_CLIENT_ID/SECRET\nFATSECRET_CONSUMER_KEY/SECRET"]
+    end
+
+    subgraph logging_detail ["Логирование"]
+        LOG_DEV["DEV: текстовый формат\nasctime level name: message"]
+        LOG_PROD["PROD: structured JSON\nts, level, logger, msg, exception"]
+        LOG_DB["БД: AgentRun\nintent, model, tokens in/out\nduration_ms, error\n+ ToolCall на каждый вызов"]
+    end
+
+    TELEGRAM -.-> HANDLER
+    REPLY -.-> TELEGRAM
+    RUNNER -.-> OPENAI
+    TOOLS_EXEC -.-> POSTGRES
+    TOOLS_EXEC -.-> FATSECRET
+    TOOLS_EXEC -.-> WHOOP_API
+    SAVE_RUN -.-> POSTGRES
+    SCHEDULER -.-> SCH_ENGINE
+    WHOOP_API -.-> EP_WHOOP_WEBHOOK
+
+    style infra fill:#ECEFF1,stroke:#546E7A
+    style request_flow fill:#E3F2FD,stroke:#1E88E5
+    style intent_system fill:#FFF3E0,stroke:#F57C00
+    style model_router fill:#FFF9C4,stroke:#F9A825
+    style context_injection fill:#E8F5E9,stroke:#43A047
+    style data_model fill:#F3E5F5,stroke:#8E24AA
+    style memory_model fill:#FCE4EC,stroke:#C62828
+    style tools_map fill:#E0F7FA,stroke:#00838F
+    style endpoints fill:#ECEFF1,stroke:#546E7A
+    style scheduler_detail fill:#EDE7F6,stroke:#5E35B1
+    style deploy fill:#E8F5E9,stroke:#43A047
+    style logging_detail fill:#FFF9C4,stroke:#F9A825

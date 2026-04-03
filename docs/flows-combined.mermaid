@@ -1,0 +1,196 @@
+flowchart TD
+    MSG["Сообщение в Telegram"] --> ACL{"Пользователь\nв whitelist?"}
+    ACL -->|Нет| IGNORE["Игнор"]
+    ACL -->|Да| PROFILE_CHECK{"Профиль\nзаполнен?"}
+    PROFILE_CHECK -->|Нет| ONB_START
+    PROFILE_CHECK -->|Да| INTENT["Классификация интента\npattern matching"]
+
+    INTENT --> HAS_PHOTO{"Есть фото?"}
+    HAS_PHOTO -->|Да| FP_IN
+    HAS_PHOTO -->|Нет| MATCH["Проверка паттернов\nпо категориям"]
+    MATCH --> MULTI{"Матч из\n2+ категорий?"}
+    MULTI -->|Да| GEN_IN
+    MULTI -->|Нет| SINGLE{"Категория?"}
+    SINGLE -->|"съел, поел,\nна завтрак"| FT_IN
+    SINGLE -->|"побегал,\nсиловая"| WK_IN
+    SINGLE -->|"спал, вешу,\nболит"| BS_IN
+    SINGLE -->|Нет матча| ADV_CHK{"Advice-паттерн?"}
+    ADV_CHK -->|Да| ADV_IN
+    ADV_CHK -->|Нет| GEN_IN
+
+    subgraph onboarding ["1. Онбординг"]
+        ONB_START["Пользователь\nотправил /start"] --> ONB_ASK["Бот запрашивает:\nпол, возраст, рост, вес,\nцель, активность"]
+        ONB_ASK --> ONB_INPUT["Пользователь пишет\nсвободным текстом"]
+        ONB_INPUT --> ONB_EXTRACT["LLM извлекает факты\nиз текста"]
+        ONB_EXTRACT --> ONB_SAVE["Каждый факт -\nсразу в user_profile"]
+        ONB_SAVE --> ONB_FOOD{"Пользователь\nпро еду/сон?"}
+        ONB_FOOD -->|Да| ONB_DEFER["Запомню, но сначала\nдавай закончим настройку"]
+        ONB_DEFER --> ONB_REMAIN
+        ONB_FOOD -->|Нет| ONB_REMAIN{"Остались\nнезаполненные?"}
+        ONB_REMAIN -->|Да| ONB_MORE["Спросить оставшиеся"]
+        ONB_MORE --> ONB_INPUT
+        ONB_REMAIN -->|Нет| ONB_CALC["Расчет нормы калорий\nпо Mifflin-St Jeor"]
+        ONB_CALC --> ONB_SUMMARY["Итоговая сводка\n+ как работает бот"]
+    end
+
+    subgraph food_photo ["2a. Питание - фото"]
+        FP_IN["Фото еды\n+ подпись"] --> FP_DETECT["LLM определяет\nвсе блюда на фото"]
+        FP_DETECT --> FP_REF["Оценка порции по референсу:\nвилка, тарелка 25 см,\nладонь, стакан"]
+        FP_REF --> FP_DB["Поиск БЖУ в FatSecret API\nрус - англ - оценка LLM"]
+        FP_DB --> FP_CALC["Данные справочника\nх оценённый вес порции"]
+        FP_CALC --> FP_CONF{"Уверенность?"}
+        FP_CONF -->|Уверен| FP_SAVE
+        FP_CONF -->|Не уверен| FP_TIP["Совет:\nположи вилку рядом\nсфоткай ближе\nподпиши что это"]
+        FP_TIP --> FP_SAVE["Каждый продукт -\nотдельный save_meal_log\nккал, Б, Ж, У"]
+        FP_SAVE --> FP_BAL["Остаток дня:\nккал и белок + совет"]
+    end
+
+    subgraph food_text ["2b. Питание - текст"]
+        FT_IN["Съел омлет с сыром\nи кофе с молоком"] --> FT_EXACT{"Указаны\nточные БЖУ?"}
+        FT_EXACT -->|Да| FT_USE["Использовать как есть\nНЕ округлять"]
+        FT_EXACT -->|Нет| FT_CATALOG["Поиск в каталоге доставки\nsearch_meal_catalog"]
+        FT_CATALOG --> FT_CAT_FOUND{"Найдено\nв каталоге?"}
+        FT_CAT_FOUND -->|Да| FT_CAT_DATA["Точные данные\nиз каталога доставки"]
+        FT_CAT_FOUND -->|Нет| FT_FATSECRET["Поиск в FatSecret API\nOAuth 1.0 HMAC-SHA1\nсначала рус, потом англ"]
+        FT_FATSECRET --> FT_API{"Найдено\nв FatSecret?"}
+        FT_API -->|Да| FT_API_DATA["Данные справочника\nх оценка порции"]
+        FT_API -->|Нет| FT_LLM["LLM оценивает\nсамостоятельно"]
+        FT_USE --> FT_SAVE
+        FT_CAT_DATA --> FT_SAVE
+        FT_API_DATA --> FT_SAVE
+        FT_LLM --> FT_SAVE["Каждый продукт -\nотдельный save_meal_log"]
+        FT_SAVE --> FT_BAL["Остаток дня:\nккал и белок + совет"]
+    end
+
+    subgraph workout ["3. Тренировка"]
+        WK_IN["Побегал 5 км\nСиловая 60 мин\nКроссфит"] --> WK_PARSE["LLM определяет:\nтип, intensity, duration"]
+        WK_PARSE --> WK_EXPLICIT{"Указаны\nдлительность и\nинтенсивность?"}
+        WK_EXPLICIT -->|Да| WK_SAVE
+        WK_EXPLICIT -->|Нет| WK_EST["Оценка из контекста:\nпобегал - moderate 30мин\nтяжелая силовая - high 90мин\nлегкая йога - low 45мин"]
+        WK_EST --> WK_SAVE["save_workout_log"]
+        WK_SAVE --> WK_WHOOP{"WHOOP\nподключен?"}
+        WK_WHOOP -->|Да| WK_REC["Запрос recovery"]
+        WK_REC --> WK_ZONE{"Recovery?"}
+        WK_ZONE -->|"Красная, менее 33%"| WK_RED["Recovery низкий -\nлегкая нагрузка"]
+        WK_ZONE -->|"Желтая, 34-66%"| WK_YELLOW["Умеренно ок,\nбез максимумов"]
+        WK_ZONE -->|"Зеленая, 67%+"| WK_GREEN["Можно нагружать"]
+        WK_WHOOP -->|Нет| WK_SKIP["Без комментария"]
+        WK_RED --> WK_RECALC
+        WK_YELLOW --> WK_RECALC
+        WK_GREEN --> WK_RECALC
+        WK_SKIP --> WK_RECALC
+        WK_RECALC["Пересчет нормы\n+50-350 ккал\nПоказать новую цель"]
+    end
+
+    subgraph body_state ["4. Сон / Вес / Самочувствие"]
+        BS_IN["Сообщение"] --> BS_TYPE{"Что в\nсообщении?"}
+
+        BS_TYPE -->|"Спал 7 часов"| BS_SLEEP["Извлечь длительность\nи время - save_sleep_log"]
+        BS_SLEEP --> BS_WHOOP{"WHOOP?"}
+        BS_WHOOP -->|Да| BS_COMPARE["Сравнение субъективный\nvs объективный сон\n+ Recovery score"]
+        BS_WHOOP -->|Нет| BS_SLEEP_OK["Записано"]
+
+        BS_TYPE -->|"Вешу 75.5"| BS_WEIGHT["save_body_metric"]
+        BS_WEIGHT --> BS_DELTA{"Дельта 2+ кг\nот профиля?"}
+        BS_DELTA -->|Да| BS_UPD["Обновить вес в профиле\n- пересчет нормы"]
+        BS_DELTA -->|Нет| BS_TREND
+        BS_UPD --> BS_TREND["Тренд за неделю"]
+
+        BS_TYPE -->|"Голова болит"| BS_NOTE["save_note"]
+        BS_NOTE --> BS_ALARM{"Тревожные\nсимптомы?"}
+        BS_ALARM -->|Да| BS_DOCTOR["Обратись к врачу"]
+        BS_ALARM -->|Нет| BS_NOTE_OK["Записано"]
+
+        BS_TYPE -->|"Несколько событий"| BS_MULTI["3 отдельных записи"]
+        BS_MULTI --> BS_SLEEP
+        BS_MULTI --> BS_WEIGHT
+        BS_MULTI --> BS_NOTE
+    end
+
+    subgraph advice ["5. Рекомендации и аналитика"]
+        ADV_IN["Что поесть?\nИтог дня\nКак прошла неделя?\nКакая моя норма?"] --> ADV_COLLECT["Обязательный сбор данных\nПЕРЕД ответом"]
+        ADV_COLLECT --> ADV_SCOPE{"Масштаб?"}
+        ADV_SCOPE -->|День| ADV_DAY["get_daily_recommendation_context\nпитание + тренировки +\nсон + recovery"]
+        ADV_SCOPE -->|Неделя| ADV_WEEK["get_week_summary\n+ сравнение с прошлой"]
+        ADV_SCOPE -->|Норма ккал| ADV_CALC["calculate_daily_target\nBMR x активность +\nнагрузка + цель x recovery"]
+        ADV_DAY --> ADV_WHOOP
+        ADV_WEEK --> ADV_WHOOP
+        ADV_CALC --> ADV_WHOOP
+        ADV_WHOOP{"WHOOP\nданные?"} -->|Да| ADV_WHOOP_DATA["+ recovery, HRV,\nstrain, сон"]
+        ADV_WHOOP -->|Нет| ADV_NO_WHOOP["Работает с тем что есть"]
+        ADV_WHOOP_DATA --> ADV_QUALITY
+        ADV_NO_WHOOP --> ADV_QUALITY
+        ADV_QUALITY{"Quality rules?"}
+        ADV_QUALITY -->|"Недосып 3 дня"| ADV_STRICT["Строгие ограничения\nв рекомендации"]
+        ADV_QUALITY -->|Нет| ADV_NORMAL["Обычный ответ"]
+        ADV_STRICT --> ADV_ANSWER
+        ADV_NORMAL --> ADV_ANSWER
+        ADV_ANSWER["Конкретный ответ:\nОсталось 40г белка -\nкуриная грудка 150г\nили творог 200г"]
+    end
+
+    subgraph general ["6. Управление записями и прочее"]
+        GEN_IN["Смешанные сообщения\nили нераспознанные\n22 tools"] --> GEN_ACTION{"Действие?"}
+        GEN_ACTION -->|Просмотр| GEN_VIEW["get_recent_logs\nпоказать записи"]
+        GEN_ACTION -->|Удаление| GEN_FIND["Найти ID - delete_log\nsoft delete"]
+        GEN_ACTION -->|Исправление| GEN_FIX["Найти ID - удалить -\nсоздать правильную"]
+        GEN_ACTION -->|Память| GEN_MEM["update_user_profile"]
+        GEN_ACTION -->|WHOOP| GEN_WHOOP["sync_whoop_now"]
+        GEN_ACTION -->|Смешанное| GEN_MIXED["Обработать оба\nсобытия последовательно"]
+    end
+
+    subgraph calories ["7. Расчет дневной нормы калорий"]
+        CAL_BMR["BMR\n10 x вес + 6.25 x рост\n- 5 x возраст +/- пол"] --> CAL_BASE["x Активность\nlow 1.35 / mod 1.45\nhigh 1.55 / v.high 1.60"]
+        CAL_BASE --> CAL_LOAD{"Нагрузка?"}
+        CAL_LOAD -->|WHOOP strain| CAL_STRAIN["strain 18+ = +320\n14+ = +220 / 10+ = +120\nx тип: силовая 1.0\nкардио 0.75 / йога 0.40"]
+        CAL_LOAD -->|Ручной ввод| CAL_MANUAL["Таблица duration x intensity\n+0 до +350 ккал\nx модификатор типа"]
+        CAL_LOAD -->|Нет| CAL_ZERO["+0"]
+        CAL_STRAIN --> CAL_GOAL
+        CAL_MANUAL --> CAL_GOAL
+        CAL_ZERO --> CAL_GOAL
+        CAL_GOAL["+/- Цель\nнабор +5% / похудение -15%\nрекомпозиция -5%\nx recovery modifier:\nзеленая 1.0 / желтая 0.85 / красная 0.70"]
+        CAL_GOAL --> CAL_TOTAL["ИТОГО ккал\nБелок 1.8-2.0 г на кг\nЖиры 25% / Углеводы остаток"]
+    end
+
+    subgraph proactive ["8. Проактивные сообщения - scheduler"]
+        PR_EVE["22:00\nВечерний итог"] --> PR_EVE_CHK{"Есть записи\nо еде?"}
+        PR_EVE_CHK -->|Да| PR_EVE_SEND["Питание: факт/цель/%\nТренировки / Вывод"]
+        PR_EVE_CHK -->|Нет| PR_EVE_SKIP["Не отправлять"]
+
+        PR_SUN["Вс 20:00\nНедельный обзор"] --> PR_SUN_CHK{"3+ дней\nс данными?"}
+        PR_SUN_CHK -->|Да| PR_SUN_SEND["Сон, питание, тренировки,\nrecovery + дельта\nк прошлой неделе"]
+        PR_SUN_CHK -->|Нет| PR_SUN_SKIP["Не отправлять"]
+
+        PR_STREAK["Пн 10:00\nStreak"] --> PR_STREAK_CHK{"7 дней\nподряд?"}
+        PR_STREAK_CHK -->|Да| PR_STREAK_SEND["7 дней подряд!"]
+        PR_STREAK_CHK -->|Нет| PR_STREAK_SKIP["---"]
+
+        PR_SLEEP["Пн 10:00\nТренд сна"] --> PR_SLEEP_CHK{"Достаточно\nданных?"}
+        PR_SLEEP_CHK -->|"Дельта 10+ мин"| PR_SLEEP_SEND["Тренд сна:\n7.2ч - 6.8ч"]
+        PR_SLEEP_CHK -->|Нет| PR_SLEEP_SKIP["---"]
+    end
+
+    subgraph whoop ["9. WHOOP-интеграция"]
+        WH_CMD["/whoop"] --> WH_CONN{"Уже\nподключен?"}
+        WH_CONN -->|Нет| WH_AUTH["Ссылка OAuth 2.0\nбраузер - авторизация"]
+        WH_AUTH --> WH_CALLBACK["/whoop/callback\nсохранение токенов"]
+        WH_CALLBACK --> WH_SYNC7["Синхронизация за 7 дней"]
+        WH_SYNC7 --> WH_DONE["Подключен"]
+        WH_CONN -->|Да| WH_RESYNC["Синхронизация за 7 дней"]
+        WH_RESYNC --> WH_RESULT["Результат:\nN recovery, N тренировок"]
+
+        WH_WEBHOOK["WHOOP webhook\nавтоматически"] --> WH_PROCESS["recovery_logs\nsleep_logs\nworkout_logs\ncycle_logs"]
+        WH_PROCESS --> WH_CONTEXT["Инъекция в контекст\nагента при каждом\nзапросе"]
+
+        WH_REFRESH["Каждый час:\nrefresh токенов"] --> WH_NIGHT["03:00:\nночная синхронизация\nподстраховка webhooks"]
+    end
+
+    style onboarding fill:#FFF3E0,stroke:#F57C00
+    style food_photo fill:#E8F5E9,stroke:#43A047
+    style food_text fill:#E8F5E9,stroke:#43A047
+    style workout fill:#E3F2FD,stroke:#1E88E5
+    style body_state fill:#F3E5F5,stroke:#8E24AA
+    style advice fill:#FFF9C4,stroke:#F9A825
+    style general fill:#ECEFF1,stroke:#546E7A
+    style calories fill:#E0F7FA,stroke:#00838F
+    style proactive fill:#FCE4EC,stroke:#C62828
+    style whoop fill:#EDE7F6,stroke:#5E35B1

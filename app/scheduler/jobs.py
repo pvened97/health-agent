@@ -83,10 +83,16 @@ async def nightly_whoop_sync():
 async def morning_checkin(bot):
     """Утренний check-in: recovery + рекомендация на день."""
     from app.agent.agent import run_agent
+    from app.whoop.sync import sync_whoop_data
 
     for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
+        # Обновляем WHOOP перед утренней сводкой (свежий recovery, сон)
+        try:
+            await sync_whoop_data(user.id, days=1)
+        except Exception:
+            logger.warning("WHOOP sync before morning check-in failed for user %s", user.id)
         try:
             response = await run_agent(
                 "Дай краткую утреннюю сводку: мой recovery, как я спал, и рекомендацию на день. Коротко, 3-5 предложений.",
@@ -103,12 +109,19 @@ async def morning_checkin(bot):
 async def evening_summary(bot):
     """Вечерний итог дня: тренировки и питание за сегодня."""
     from app.agent.agent import run_agent
+    from app.whoop.sync import sync_whoop_data
 
     today = today_msk()
 
     for user, tg_account in await _get_users_with_telegram():
         if not tg_account.chat_id:
             continue
+
+        # Обновляем WHOOP данные перед итогом (strain растёт в течение дня)
+        try:
+            await sync_whoop_data(user.id, days=1)
+        except Exception:
+            logger.warning("WHOOP sync before evening summary failed for user %s", user.id)
 
         # Не отправляем если за сегодня нет ни одной записи о еде
         async with async_session() as session:

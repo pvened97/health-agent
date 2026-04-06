@@ -1,7 +1,35 @@
 from datetime import date, datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from pydantic_settings import BaseSettings
+
+# Стоимость за 1M токенов (USD), short-context
+MODEL_PRICING: dict[str, dict[str, Decimal]] = {
+    "gpt-5.4": {
+        "input": Decimal("2.50"),
+        "output": Decimal("15.00"),
+    },
+    "gpt-5.4-mini": {
+        "input": Decimal("0.75"),
+        "output": Decimal("4.50"),
+    },
+}
+
+
+def calculate_cost_usd(
+    model: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+) -> Decimal | None:
+    """Считает стоимость запроса в USD по модели и токенам."""
+    if not model or model not in MODEL_PRICING:
+        return None
+    rates = MODEL_PRICING[model]
+    t_in = input_tokens or 0
+    t_out = output_tokens or 0
+    cost = (Decimal(t_in) * rates["input"] + Decimal(t_out) * rates["output"]) / Decimal("1000000")
+    return cost.quantize(Decimal("0.000001"))
 
 
 class Settings(BaseSettings):

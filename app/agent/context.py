@@ -8,12 +8,13 @@ from app.config import today_msk
 from sqlalchemy import select, func
 
 from app.database import async_session
-from app.models.memory import UserProfile, DerivedRule
+from app.models.memory import UserProfile, DerivedRule, MemoryNote
 from app.models.logs import SleepLog, MealLog, WorkoutLog, DailyNote, RecoveryLog
 from app.quality.rules import check_all_rules
 
 # Поля, которые должны быть заполнены для завершения онбординга
 REQUIRED_PROFILE_FIELDS = [
+    ("personal", "first_name", "Имя"),
     ("anthropometry", "sex", "Пол (М/Ж)"),
     ("anthropometry", "age", "Возраст"),
     ("anthropometry", "weight_kg", "Вес (кг)"),
@@ -45,6 +46,20 @@ async def get_missing_profile_fields(user_id: uuid.UUID) -> list[str]:
         desc for cat, key, desc in REQUIRED_PROFILE_FIELDS
         if (cat, key) not in existing
     ]
+
+
+async def get_user_first_name(user_id: uuid.UUID) -> str | None:
+    """Возвращает имя пользователя из профиля или None."""
+    async with async_session() as session:
+        row = (await session.execute(
+            select(UserProfile.value).where(
+                UserProfile.user_id == user_id,
+                UserProfile.category == "personal",
+                UserProfile.key == "first_name",
+                UserProfile.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+    return row
 
 
 async def build_user_context(user_id: uuid.UUID) -> str:
@@ -200,6 +215,24 @@ async def build_user_context(user_id: uuid.UUID) -> str:
             for r in rules:
                 rules_lines.append(f"  • {r.rule} (уверенность: {r.confidence:.0%})")
             sections.append("\n".join(rules_lines))
+
+        # --- Долгосрочная память (заметки пользователя) ---
+        memory_stmt = (
+            select(MemoryNote)
+            .where(
+                MemoryNote.user_id == user_id,
+                MemoryNote.deleted_at.is_(None),
+            )
+            .order_by(MemoryNote.category, MemoryNote.created_at)
+            .limit(20)
+        )
+        memories = (await session.execute(memory_stmt)).scalars().all()
+
+        if memories:
+            mem_lines = ["Память (пользователь просил запомнить):"]
+            for m in memories:
+                mem_lines.append(f"  • [{m.category}] {m.content}")
+            sections.append("\n".join(mem_lines))
 
     if not sections:
         return ""

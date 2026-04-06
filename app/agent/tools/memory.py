@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.agent.tools._context import get_user_id
 from app.database import async_session
-from app.models.memory import UserProfile, DerivedRule
+from app.models.memory import UserProfile, DerivedRule, MemoryNote
 
 
 @function_tool
@@ -126,3 +126,106 @@ async def save_derived_rule(
         await session.commit()
 
     return f"Наблюдение сохранено (confidence: {confidence}): {rule}"
+
+
+@function_tool
+async def save_memory(
+    content: str,
+    category: str = "general",
+) -> str:
+    """Сохраняет заметку в долгосрочную память. Используй когда пользователь просит запомнить что-то:
+    предпочтения, ограничения, привычки, аллергии, любимые блюда, или когда ты сам замечаешь важное.
+
+    Примеры: «запомни, что я не ем глютен», «я обычно тренируюсь по утрам», «у меня аллергия на арахис».
+
+    Args:
+        content: Что запомнить (краткая формулировка факта)
+        category: Категория: food, training, health, sleep, general
+    """
+    user_id = get_user_id()
+
+    # Проверяем дубликат
+    async with async_session() as session:
+        existing = (await session.execute(
+            select(MemoryNote).where(
+                MemoryNote.user_id == user_id,
+                MemoryNote.content == content,
+                MemoryNote.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            existing.occurrences += 1
+            await session.commit()
+            return f"Это уже запомнено (упомянуто {existing.occurrences} раз): {content}"
+
+        note = MemoryNote(
+            user_id=user_id,
+            content=content,
+            category=category,
+            source="user_manual",
+            status="active",
+        )
+        session.add(note)
+        await session.commit()
+
+    return f"Запомнил: {content}"
+
+
+@function_tool
+async def get_memories() -> str:
+    """Показывает все сохранённые заметки из долгосрочной памяти.
+    Вызывай когда пользователь спрашивает «что ты запомнил?», «что ты знаешь обо мне?»."""
+    user_id = get_user_id()
+
+    async with async_session() as session:
+        notes = (await session.execute(
+            select(MemoryNote).where(
+                MemoryNote.user_id == user_id,
+                MemoryNote.deleted_at.is_(None),
+            ).order_by(MemoryNote.category, MemoryNote.created_at)
+        )).scalars().all()
+
+    if not notes:
+        return "Долгосрочная память пуста. Скажи «запомни, что ...» чтобы я начал запоминать."
+
+    lines = ["Моя память о тебе:"]
+    current_cat = None
+    for note in notes:
+        if note.category != current_cat:
+            current_cat = note.category
+            lines.append(f"\n[{current_cat}]")
+        times = f" (x{note.occurrences})" if note.occurrences > 1 else ""
+        lines.append(f"  • {note.content}{times}")
+
+    return "\n".join(lines)
+
+
+@function_tool
+async def delete_memory(content_fragment: str) -> str:
+    """Удаляет заметку из долгосрочной памяти. Используй когда пользователь говорит «забудь, что ...» или «удали из памяти».
+
+    Args:
+        content_fragment: Часть текста заметки для поиска
+    """
+    user_id = get_user_id()
+
+    async with async_session() as session:
+        notes = (await session.execute(
+            select(MemoryNote).where(
+                MemoryNote.user_id == user_id,
+                MemoryNote.content.ilike(f"%{content_fragment}%"),
+                MemoryNote.deleted_at.is_(None),
+            )
+        )).scalars().all()
+
+        if not notes:
+            return f"Не нашёл заметку с «{content_fragment}» в памяти."
+
+        for note in notes:
+            note.deleted_at = datetime.now()
+        await session.commit()
+
+    if len(notes) == 1:
+        return f"Забыл: {notes[0].content}"
+    return f"Удалено {len(notes)} заметок по запросу «{content_fragment}»."

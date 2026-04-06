@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, ForeignKey, func
+from sqlalchemy import DateTime, Integer, Numeric, String, Text, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,7 @@ class AgentRun(Base):
     intent: Mapped[str | None] = mapped_column(String(30))
     tokens_input: Mapped[int | None] = mapped_column(Integer)
     tokens_output: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
     trace_id: Mapped[str | None] = mapped_column(String(100))

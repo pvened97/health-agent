@@ -265,3 +265,132 @@ class TestTimezone:
         result = now_msk()
         # Moscow is UTC+3
         assert result.utcoffset().total_seconds() == 3 * 3600
+
+
+# ============================================================
+# classify_intent (router.py)
+# ============================================================
+class TestClassifyIntent:
+    """Тесты на классификацию интентов по тексту сообщения."""
+
+    def _ci(self, msg: str, has_image: bool = False) -> str:
+        from app.agent.router import classify_intent
+        return classify_intent(msg, has_image=has_image)
+
+    # --- food_photo ---
+    def test_photo_always_food_photo(self):
+        assert self._ci("любой текст", has_image=True) == "food_photo"
+
+    def test_photo_ignores_workout_text(self):
+        assert self._ci("побегал 5 км", has_image=True) == "food_photo"
+
+    # --- food_text ---
+    def test_food_text_syel(self):
+        assert self._ci("Съел омлет с сыром") == "food_text"
+
+    def test_food_text_na_zavtrak(self):
+        assert self._ci("На завтрак овсянка") == "food_text"
+
+    def test_food_text_obed_colon(self):
+        assert self._ci("Обед: борщ и хлеб") == "food_text"
+
+    def test_food_text_vypil(self):
+        assert self._ci("Выпил протеин") == "food_text"
+
+    def test_food_text_poobiledal(self):
+        assert self._ci("Пообедал в кафе") == "food_text"
+
+    # --- food_text exclude → advice ---
+    def test_chto_poest_is_advice(self):
+        assert self._ci("Что поесть на ужин?") == "advice"
+
+    def test_chto_ya_el_is_general(self):
+        assert self._ci("Что я ел вчера?") == "general"
+
+    def test_udali_edu_is_general(self):
+        assert self._ci("Удали завтрак") == "general"
+
+    # --- workout ---
+    def test_workout_pobegal(self):
+        assert self._ci("Побегал 5 км") == "workout"
+
+    def test_workout_silovaya(self):
+        assert self._ci("Силовая 60 минут") == "workout"
+
+    def test_workout_zal(self):
+        assert self._ci("Сходил в зал") == "workout"
+
+    def test_workout_crossfit(self):
+        assert self._ci("Кроссфит сегодня") == "workout"
+
+    # --- workout exclude → advice/general ---
+    def test_kak_trenirovat_is_advice(self):
+        assert self._ci("Как тренироваться?") == "advice"
+
+    def test_plan_trenirovok_is_advice(self):
+        assert self._ci("Спланируй тренировку") == "advice"
+
+    # --- body_state ---
+    def test_body_spal(self):
+        assert self._ci("Спал 7 часов") == "body_state"
+
+    def test_body_veshu(self):
+        assert self._ci("Вешу 75.5") == "body_state"
+
+    def test_body_bolit(self):
+        assert self._ci("Голова болит с утра") == "body_state"
+
+    def test_body_stress(self):
+        assert self._ci("Сильный стресс на работе") == "body_state"
+
+    # --- body_state exclude ---
+    def test_kak_uluchshit_son_is_advice(self):
+        assert self._ci("Как улучшить сон?") == "advice"
+
+    def test_pokaji_ves_is_general(self):
+        assert self._ci("Покажи вес") == "general"
+
+    # --- advice ---
+    def test_advice_itog_dnya(self):
+        assert self._ci("Итог дня") == "advice"
+
+    def test_advice_norma_kaloriy(self):
+        assert self._ci("Какая моя норма калорий?") == "advice"
+
+    def test_advice_kak_pitatsya(self):
+        assert self._ci("Как правильно питаться?") == "advice"
+
+    def test_advice_obzor_nedeli(self):
+        assert self._ci("Обзор недели") == "advice"
+
+    # --- mixed → general ---
+    def test_mixed_food_and_workout(self):
+        assert self._ci("Съел омлет и побегал 5 км") == "general"
+
+    def test_mixed_sleep_and_food(self):
+        assert self._ci("Спал 6 часов, на завтрак яйца") == "general"
+
+    def test_mixed_body_and_workout(self):
+        assert self._ci("Спал плохо и побегал утром") == "general"
+
+    # --- food_text: числовые маркеры ---
+    def test_food_bju_kkal(self):
+        assert self._ci("Приём пищи. Удон с кальмаром. Бжу 21/7/72. 435 ккал") == "food_text"
+
+    def test_food_poschitay(self):
+        assert self._ci("Хлеб посчитай примерно") == "food_text"
+
+    # --- mixed: food + workout → general ---
+    def test_mixed_posle_trenirovki_food(self):
+        assert self._ci("После тренировки батончик. Бжу. 20/4/4. 173 ккал") == "general"
+
+    # --- body_state exclude: порция, не масса тела ---
+    def test_ves_pomenshe_not_body(self):
+        assert self._ci("Оцени вес поменьше, тут небольшая тарелка") != "body_state"
+
+    # --- general fallback ---
+    def test_privet_is_general(self):
+        assert self._ci("Привет") == "general"
+
+    def test_random_question_is_general(self):
+        assert self._ci("Как дела?") == "general"

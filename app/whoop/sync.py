@@ -399,15 +399,15 @@ async def _sync_cycles(user_id: uuid.UUID, records: list[dict]) -> int:
             )).scalar_one_or_none()
 
             if existing:
-                if existing.deleted_at is None:
-                    continue
+                # Всегда обновляем strain — он растёт в течение дня
                 existing.date = cycle_date
                 existing.day_strain = score.get("strain")
                 existing.kilojoules = score.get("kilojoule")
                 existing.avg_hr = score.get("average_heart_rate")
                 existing.max_hr = score.get("max_heart_rate")
                 existing.last_synced_at = datetime.now(timezone.utc)
-                existing.deleted_at = None
+                if existing.deleted_at is not None:
+                    existing.deleted_at = None
             else:
                 log = CycleLog(
                     user_id=user_id,

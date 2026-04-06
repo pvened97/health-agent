@@ -9,7 +9,7 @@ from datetime import datetime
 from agents import Agent, Runner, function_tool
 from agents.items import ToolCallItem, ToolCallOutputItem
 
-from app.config import settings
+from app.config import calculate_cost_usd, settings
 from app.database import async_session
 from app.models.agent import AgentRun, ToolCall
 from app.agent.tools._context import set_user_id, get_user_id
@@ -30,6 +30,9 @@ from app.agent.tools.memory import (
     update_user_profile,
     delete_memory_item,
     save_derived_rule,
+    save_memory,
+    get_memories,
+    delete_memory,
 )
 from app.agent.tools.state import get_current_state
 from app.agent.tools.summary import get_daily_recommendation_context, get_week_summary
@@ -37,8 +40,8 @@ from app.agent.tools.catalog import search_meal_catalog
 from app.agent.tools.whoop import get_whoop_status, sync_whoop_now, get_latest_whoop_metrics
 from app.agent.tools.body import save_body_metric, get_weight_history
 from app.agent.tools.calorie_calc import calculate_daily_target, get_nutrition_remaining
-from app.agent.tools.food_db import lookup_food_nutrition
-from app.agent.context import build_user_context
+from app.agent.tools.food_db import lookup_food_nutrition, lookup_barcode
+from app.agent.context import build_user_context, get_user_first_name
 from app.agent.router import choose_model, classify_intent, INTENT_FOOD_PHOTO, INTENT_FOOD_TEXT, INTENT_WORKOUT, INTENT_BODY_STATE, INTENT_ADVICE, INTENT_GENERAL
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,7 @@ ONBOARDING_PROMPT = """Ты — персональный ассистент по
 Твоя единственная задача — собрать обязательные данные о пользователе и сохранить их через update_user_profile.
 
 Обязательные поля:
+- Имя (category="personal", key="first_name") — спроси первым. Сохраняй как есть, с заглавной буквы.
 - Пол (category="anthropometry", key="sex") — сохраняй как «M» или «F». Определяй из контекста: «мужчина/парень/м» → M, «женщина/девушка/ж» → F.
 - Возраст (category="anthropometry", key="age")
 - Вес в кг (category="anthropometry", key="weight_kg")
@@ -95,6 +99,12 @@ BASE_RULES = """Общие правила:
 - Отвечай кратко. Мало данных — скажи прямо.
 - Ты НЕ врач. Без диагнозов, без назначений. Вне компетенции → к специалисту.
 
+Долгосрочная память:
+- Если пользователь говорит «запомни», «я не ем ...», «у меня аллергия на ...», «я предпочитаю ...» — вызови save_memory.
+- Если пользователь говорит «забудь», «удали из памяти» — вызови delete_memory.
+- Если пользователь спрашивает «что ты обо мне знаешь?», «что запомнил?» — вызови get_memories.
+- Учитывай заметки из раздела «Память» в контексте при каждом ответе. Например, если в памяти «не ем глютен» — не рекомендуй глютеновые продукты.
+
 Формат ответов:
 - Структурируй ответ по смысловым блокам, каждый блок — отдельный абзац (пустая строка между ними).
 - В начале каждого блока ставь эмодзи по теме: 🍽 питание, 🏋️ тренировки, 😴 сон, 💚 recovery, ⚡️ итого/вывод, 📊 статистика, 💡 рекомендация, ⚠️ предупреждение.
@@ -102,26 +112,44 @@ BASE_RULES = """Общие правила:
 """
 
 FOOD_PHOTO_PROMPT = BASE_RULES + """
-Ты — нутрициолог. Твоя задача: определить еду на фото, оценить порцию и БЖУ, записать.
+Ты — нутрициолог. Пользователь прислал фото. Сначала определи ЧТО на фото:
 
-Пошаговый анализ:
+=== ВАРИАНТ А: На фото ШТРИХКОД (полоски с цифрами, упаковка продукта) ===
+1. Считай цифры штрихкода с фото (8 или 13 цифр под полосками).
+2. Вызови lookup_barcode(цифры).
+3. Если продукт НАЙДЕН:
+   - Используй ТОЧНЫЕ данные из базы (не оценивай сам).
+   - Вес порции = вес упаковки из ответа базы. Если в ответе есть данные «на порцию» — используй их.
+   - Если на фото или в подписи видно количество (например «2 штуки») — умножь.
+   - Запиши через save_meal_log, покажи что записал.
+   - Вызови get_nutrition_remaining и покажи баланс дня.
+4. Если продукт НЕ НАЙДЕН:
+   - Скажи: «Не нашёл этот продукт по штрихкоду. Сфоткай само блюдо или напиши что это — тогда запишу.»
+   - НЕ пытайся угадывать продукт по штрихкоду. НЕ записывай ничего.
+   - На этом СТОП. Жди следующее сообщение.
+
+=== ВАРИАНТ Б: На фото ЕДА (блюдо, тарелка, продукты) ===
 1. Определи все блюда/продукты на фото.
 2. Для каждого продукта вызови lookup_food_nutrition(название) на русском. Если не нашёл — повтори на английском. Если и там нет — оцени сам.
 3. Оцени размер порции. Ищи референсные объекты (вилка, ложка, нож, рука, стакан, тарелка ~25 см) — сравнивай размер еды с ними. Котлета с ладонь ≈ 120–150 г, горка риса со столовую ложку ≈ 150 г.
 4. Рассчитай калории и БЖУ: данные из справочника × оценённый вес порции.
 5. Запиши КАЖДЫЙ продукт через отдельный save_meal_log с 4 нутриентами: calories, protein_g, fat_g, carbs_g.
-6. Вызови get_nutrition_remaining и покажи остаток дня.
+6. Покажи ИТОГО по приёму пищи: сумму калорий и БЖУ по всем записанным позициям.
+7. Вызови get_nutrition_remaining и покажи баланс дня: сколько съедено / цель / сколько осталось.
 
-Уверенность — ОБЯЗАТЕЛЬНО покажи одну из трёх:
+Уверенность (ТОЛЬКО для варианта Б) — ОБЯЗАТЕЛЬНО покажи одну из трёх:
 • Уверен — блюдо чётко видно, порция понятна (есть референс или стандартная подача).
 • Скорее уверен — блюдо определяется, но порция приблизительная (нет референса, еда в контейнере, частично закрыта).
 • Не уверен — блюдо сложно определить, фото нечёткое, или разброс оценки калорий > 30%.
 
-Если «Скорее уверен» или «Не уверен» — добавь КОНКРЕТНЫЙ совет:
-• Нечёткое фото → «Попробуй сфотографировать ближе и при хорошем освещении»
-• Непонятен размер → «Положи рядом вилку или ложку — так я точнее определю порцию»
+Если «Скорее уверен» или «Не уверен» — определи КОНКРЕТНУЮ причину неуверенности и дай совет ТОЛЬКО по ней.
+НЕ давай совет, который уже выполнен. Например, если вилка/ложка/нож видны на фото — НЕ советуй положить столовый прибор.
+Возможные советы (выбери ТОЛЬКО релевантный):
+• Фото нечёткое/тёмное → «Попробуй сфотографировать ближе и при хорошем освещении»
+• Нет ни одного референсного объекта на фото → «Положи рядом вилку или ложку — так я точнее определю порцию»
 • Непонятно блюдо → «Подпиши что это — мне сложно определить по фото»
 • Еда закрыта/в контейнере → «Если можешь — сфотографируй открытой, сейчас часть не видна»
+• Если причина только в приблизительной оценке порции при хорошем фото — просто укажи это без совета
 
 Если к фото есть подпись — учитывай её, она повышает точность.
 Если в подписи указаны точные цифры БЖУ/калорий — используй их КАК ЕСТЬ, не оценивай заново.
@@ -140,8 +168,11 @@ FOOD_TEXT_PROMPT = BASE_RULES + """
 - Оценивай ТОЛЬКО позиции, где цифр нет. Затем СЛОЖИ точные + оценочные.
 - Пример: «вафли БЖУ 15/12/35 339 ккал, гранола 11/13/43 336 ккал, яблоко» → вафли 339 + гранола 336 + яблоко ~60 = 735 ккал.
 
+Штрихкод:
+- Если пользователь прислал числовой код (8 или 13 цифр) — вызови lookup_barcode(код). Если продукт найден — используй ТОЧНЫЕ данные из базы.
+
 Справочник БЖУ:
-- Если пользователь НЕ указал точные цифры — СНАЧАЛА вызови lookup_food_nutrition(название) на русском.
+- Если пользователь НЕ указал точные цифры и нет штрихкода — СНАЧАЛА вызови lookup_food_nutrition(название) на русском.
 - Если не нашёл — повтори на английском (переведи сам).
 - Используй данные из справочника × оценённый вес порции.
 - Если и на английском не нашлось — оцени самостоятельно.
@@ -152,7 +183,8 @@ FOOD_TEXT_PROMPT = BASE_RULES + """
 - Если блюдо найдено в каталоге — используй ТОЧНЫЕ данные оттуда. Не оценивай сам.
 
 После записи:
-- ОБЯЗАТЕЛЬНО вызови get_nutrition_remaining и покажи остаток дня: сколько ккал и белка осталось + короткий совет что доесть.
+- ОБЯЗАТЕЛЬНО покажи ИТОГО по приёму пищи: сумму калорий и БЖУ по всем записанным позициям.
+- Затем вызови get_nutrition_remaining и покажи баланс дня: сколько съедено / цель / сколько осталось + короткий совет что доесть.
 """
 
 WORKOUT_PROMPT = BASE_RULES + """
@@ -259,6 +291,7 @@ ONBOARDING_TOOLS = [
 
 FOOD_PHOTO_TOOLS = [
     get_today_date,
+    lookup_barcode,
     lookup_food_nutrition,
     save_meal_log,
     get_nutrition_remaining,
@@ -266,6 +299,7 @@ FOOD_PHOTO_TOOLS = [
 
 FOOD_TEXT_TOOLS = [
     get_today_date,
+    lookup_barcode,
     lookup_food_nutrition,
     search_meal_catalog,
     save_meal_log,
@@ -302,6 +336,9 @@ ADVICE_TOOLS = [
     get_nutrition_remaining,
     get_weight_history,
     search_meal_catalog,
+    save_memory,
+    get_memories,
+    delete_memory,
 ]
 
 GENERAL_TOOLS = [
@@ -328,6 +365,10 @@ GENERAL_TOOLS = [
     calculate_daily_target,
     get_nutrition_remaining,
     lookup_food_nutrition,
+    lookup_barcode,
+    save_memory,
+    get_memories,
+    delete_memory,
 ]
 
 # Маппинг интент → (промпт, tools)
@@ -427,6 +468,7 @@ async def run_agent(
         dynamic_context = await build_user_context(user_id)
 
     intent = None
+    first_name = None
     if is_onboarding:
         instructions = ONBOARDING_PROMPT
         tools = ONBOARDING_TOOLS
@@ -434,6 +476,15 @@ async def run_agent(
         intent = intent_override or classify_intent(user_message, has_image=bool(image_url))
         instructions, tools = INTENT_CONFIG[intent]
         logger.info("Intent: %s%s", intent, " (override)" if intent_override else "")
+        if user_id:
+            first_name = await get_user_first_name(user_id)
+
+    if first_name:
+        instructions += (
+            f"\n\nИмя пользователя: {first_name}. "
+            "Иногда обращайся по имени (примерно в каждом 3-5 ответе), "
+            "остальное время — без имени. Не используй имя в каждом сообщении, это выглядит неестественно."
+        )
 
     if dynamic_context:
         instructions += f"\n\n--- Контекст пользователя ---\n{dynamic_context}\n---"
@@ -469,16 +520,28 @@ async def run_agent(
     history.append(user_item)
     _trim_history(history)
 
-    # Запускаем агента с полной историей
+    # Запускаем агента с полной историей (retry при rate limit)
+    import asyncio as _asyncio
+
     error_text = None
     user_error = None
     result = None
-    try:
-        result = await Runner.run(agent, history)
-    except Exception as e:
-        error_text = f"{type(e).__name__}: {e}"
-        user_error = _classify_error(e)
-        logger.exception("Agent run failed")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            result = await Runner.run(agent, history)
+            break
+        except Exception as e:
+            is_rate_limit = "ratelimit" in type(e).__name__.lower() or "rate_limit" in str(e).lower()
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = 2 ** attempt  # 1s, 2s
+                logger.warning("Rate limit hit, retry %d/%d in %ds", attempt + 1, max_retries, wait)
+                await _asyncio.sleep(wait)
+                continue
+            error_text = f"{type(e).__name__}: {e}"
+            user_error = _classify_error(e)
+            logger.exception("Agent run failed")
+            break
 
     duration_ms = int((time.monotonic() - start_time) * 1000)
     output_text = result.final_output if result else None
@@ -529,6 +592,7 @@ async def run_agent(
                     model=model_used,
                     tokens_input=total_input_tokens or None,
                     tokens_output=total_output_tokens or None,
+                    cost_usd=calculate_cost_usd(model_used, total_input_tokens, total_output_tokens),
                     duration_ms=duration_ms,
                     error=error_text,
                 )

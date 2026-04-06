@@ -216,57 +216,76 @@ async def handle_costs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not user:
         return
 
-    from sqlalchemy import select, func, case
+    from datetime import timedelta
+    from decimal import Decimal
+    from sqlalchemy import select, func
     from app.database import async_session
     from app.models.agent import AgentRun
+    from app.config import MODEL_PRICING, today_msk
 
-    # Цены за 1M токенов (USD) — обновлять при смене модели
-    PRICES = {
-        "gpt-5.4":      {"input": 2.00, "output": 8.00},
-        "gpt-5.4-mini": {"input": 0.30, "output": 1.20},
-    }
-    DEFAULT_PRICE = {"input": 2.00, "output": 8.00}
+    today = today_msk()
+    period_30d = today - timedelta(days=30)
 
+    def _cost_row(model: str, inp: int, out: int) -> float:
+        rates = MODEL_PRICING.get(model)
+        if not rates:
+            return 0.0
+        return float((Decimal(inp) * rates["input"] + Decimal(out) * rates["output"]) / Decimal("1000000"))
+
+    # Один запрос: модель + период (всё время / 30д / сегодня)
     async with async_session() as session:
         stmt = (
             select(
                 AgentRun.model,
-                func.sum(AgentRun.tokens_input).label("input"),
-                func.sum(AgentRun.tokens_output).label("output"),
+                func.sum(AgentRun.tokens_input).label("inp"),
+                func.sum(AgentRun.tokens_output).label("out"),
                 func.count(AgentRun.id).label("runs"),
             )
             .where(AgentRun.user_id == user.id)
             .group_by(AgentRun.model)
         )
-        rows = (await session.execute(stmt)).all()
+        rows_all = (await session.execute(stmt)).all()
 
-    if not rows or all(r.input is None for r in rows):
+        stmt_30d = stmt.where(func.date(AgentRun.created_at) >= period_30d)
+        rows_30d = (await session.execute(stmt_30d)).all()
+
+        stmt_today = stmt.where(func.date(AgentRun.created_at) == today)
+        rows_today = (await session.execute(stmt_today)).all()
+
+    if not rows_all or all(r.inp is None for r in rows_all):
         await update.message.reply_text("Пока нет данных о расходах.")
         return
 
-    lines = ["Расходы на OpenAI API:\n"]
-    total_cost = 0.0
-    total_input = 0
-    total_output = 0
+    def _format_period(rows, label: str) -> list[str]:
+        lines = [f"{label}\n"]
+        total_cost = 0.0
+        total_inp = 0
+        total_out = 0
+        total_runs = 0
+        for row in rows:
+            inp = row.inp or 0
+            out = row.out or 0
+            if not inp and not out:
+                continue
+            cost = _cost_row(row.model, inp, out)
+            total_cost += cost
+            total_inp += inp
+            total_out += out
+            total_runs += row.runs
+            lines.append(
+                f"  {row.model}: {row.runs} зап, "
+                f"{inp:,} in / {out:,} out — ${cost:.4f}"
+            )
+        lines.append(f"  Итого: {total_runs} зап — ${total_cost:.4f}")
+        return lines
 
-    for row in rows:
-        if not row.input and not row.output:
-            continue
-        inp = row.input or 0
-        out = row.output or 0
-        prices = PRICES.get(row.model, DEFAULT_PRICE)
-        cost = (inp / 1_000_000) * prices["input"] + (out / 1_000_000) * prices["output"]
-        total_cost += cost
-        total_input += inp
-        total_output += out
-        lines.append(
-            f"{row.model}: {row.runs} запросов, "
-            f"{inp:,} in / {out:,} out — ${cost:.4f}"
-        )
+    parts = _format_period(rows_all, "За всё время:")
+    parts.append("")
+    parts.extend(_format_period(rows_30d, "За 30 дней:"))
+    parts.append("")
+    parts.extend(_format_period(rows_today, "Сегодня:"))
 
-    lines.append(f"\nИтого: {total_input:,} in / {total_output:,} out — ${total_cost:.4f}")
-
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(parts))
 
 
 async def handle_whoop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

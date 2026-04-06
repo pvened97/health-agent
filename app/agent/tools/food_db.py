@@ -164,3 +164,85 @@ async def lookup_food_nutrition(query: str) -> str:
     lines.append("Используй эти данные для расчёта. Умножь на вес порции если нужно.")
 
     return "\n".join(lines)
+
+
+@function_tool
+async def lookup_barcode(barcode: str) -> str:
+    """Ищет продукт по штрихкоду (EAN-13/EAN-8) в базе Open Food Facts.
+    Возвращает название, бренд, калории и БЖУ на 100г и на порцию.
+    Вызывай когда на фото виден штрихкод или пользователь прислал числовой код продукта.
+
+    Args:
+        barcode: Числовой штрихкод продукта (8 или 13 цифр, например «4610169567113»)
+    """
+    barcode = barcode.strip()
+    if not barcode.isdigit() or len(barcode) not in (8, 13):
+        return f"Некорректный штрихкод: «{barcode}». Ожидается 8 или 13 цифр."
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://world.openfoodfacts.org/api/v2/product/{barcode}"
+                "?fields=product_name,brands,quantity,nutriments",
+                headers={"User-Agent": "HealthAgent/1.0"},
+                timeout=10,
+            )
+            data = resp.json()
+    except Exception:
+        logger.exception("Open Food Facts API error for barcode %s", barcode)
+        return f"Ошибка при запросе по штрихкоду {barcode}. Попробуй оценить вручную."
+
+    if data.get("status") != 1:
+        return f"Продукт со штрихкодом {barcode} не найден в базе. Оцени БЖУ самостоятельно."
+
+    product = data.get("product", {})
+    name = product.get("product_name", "Без названия")
+    brand = product.get("brands", "")
+    quantity = product.get("quantity", "")
+    n = product.get("nutriments", {})
+
+    cal_100 = n.get("energy-kcal_100g")
+    prot_100 = n.get("proteins_100g")
+    fat_100 = n.get("fat_100g")
+    carbs_100 = n.get("carbohydrates_100g")
+    fiber_100 = n.get("fiber_100g")
+
+    cal_srv = n.get("energy-kcal_serving")
+    prot_srv = n.get("proteins_serving")
+    fat_srv = n.get("fat_serving")
+    carbs_srv = n.get("carbohydrates_serving")
+
+    lines = [f"Найден по штрихкоду {barcode}:"]
+    title = name
+    if brand:
+        title += f" ({brand})"
+    if quantity:
+        title += f", {quantity}"
+    lines.append(f"  {title}")
+
+    if cal_100 is not None:
+        parts = [f"{cal_100:.0f} ккал"]
+        if prot_100 is not None:
+            parts.append(f"Б {prot_100:.1f}г")
+        if fat_100 is not None:
+            parts.append(f"Ж {fat_100:.1f}г")
+        if carbs_100 is not None:
+            parts.append(f"У {carbs_100:.1f}г")
+        if fiber_100 is not None:
+            parts.append(f"клетчатка {fiber_100:.1f}г")
+        lines.append(f"  На 100г: {', '.join(parts)}")
+
+    if cal_srv is not None:
+        parts_srv = [f"{cal_srv:.0f} ккал"]
+        if prot_srv is not None:
+            parts_srv.append(f"Б {prot_srv:.1f}г")
+        if fat_srv is not None:
+            parts_srv.append(f"Ж {fat_srv:.1f}г")
+        if carbs_srv is not None:
+            parts_srv.append(f"У {carbs_srv:.1f}г")
+        lines.append(f"  На порцию: {', '.join(parts_srv)}")
+
+    lines.append("")
+    lines.append("Используй данные из базы. Умножь на вес порции если пользователь указал.")
+
+    return "\n".join(lines)
